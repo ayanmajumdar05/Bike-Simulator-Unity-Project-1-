@@ -20,8 +20,9 @@ public class BikeControlRemake : MonoBehaviour
     PlayerControls controls;
     float throttleVal;
     float brakeVal;
-    public float groundDistanceBottom;
-    public float groundDistanceTop;
+    public float previousGearSpeed;
+    public float currentGearSpeed;
+    public float nextGearSpeed;
     public float susDiffDistance;
     public bool rotateBike;
     public bool MoveSuspension;
@@ -168,8 +169,8 @@ public class BikeControlRemake : MonoBehaviour
     private float ClusterstartPosition = 0.0f;
     private float ClusterendPosition = -270.0f;
     private float ClusterdesiredPosition;
-    public float[] gearRatios;
-    public float[] gearMaxSpeed;
+    [Serialize] public float[] gearRatios;
+    [Serialize] public float[] gearMaxSpeed;
     private GearState gearState;
     public GearBoxType gearBoxType;
     public bool isChangingGear;
@@ -233,9 +234,21 @@ public class BikeControlRemake : MonoBehaviour
         LeanOnTurn();
         if (HandleCOGMovement)
         {
-            MoveCOG();
-        }
+            if (isAccelerating == true)
+            {
+                MoveCOG();
+            }
+            if (isBraking == true)
+            {
+                //Dont move COG
+            }
+            if (isAccelerating == false || isBraking == true)
+            {
+                MoveCOG();
+            }
 
+        }
+        /*
         if (currentSpeed <= 15.0f)
         {
 
@@ -270,15 +283,35 @@ public class BikeControlRemake : MonoBehaviour
             HandleSteering();
             handleModifier = 0.3f;
         }
+        */
+        HandleSteering();
         ModifyFriction();
         UpdateHandles();
 
+        if (currentGear != 0)
+        {
+            previousGearSpeed = gearMaxSpeed[currentGear - 1];
+        }
+        if (currentGear != 6)
+        {
+            nextGearSpeed = gearMaxSpeed[currentGear + 1];
+        }
+        currentGearSpeed = gearMaxSpeed[currentGear];
     }
     void UpdateCluster()
     {
         UpdateNeedle();
-        string RPMTextVal = currentRPM.ToString("0000");
-        RPMText.SetText(RPMTextVal);
+        string RPMTextVal;
+        if (currentRPM < 10000)
+        {
+            RPMTextVal = currentRPM.ToString("0000");
+            RPMText.SetText(RPMTextVal);
+        }
+        if (currentRPM > 9999)
+        {
+            RPMTextVal = currentRPM.ToString("00000");
+            RPMText.SetText(RPMTextVal);
+        }
         string GearTextVal = (gearState == GearState.Neutral) ? "N" : (currentGear + 1).ToString();
         GearText.SetText(GearTextVal);
     }
@@ -288,7 +321,9 @@ public class BikeControlRemake : MonoBehaviour
         //float rawHorizontalInput = Input.GetAxis("Horizontal");
         //horizontalInput = Mathf.Lerp(horizontalInput, rawHorizontalInput, 10*Time.deltaTime);
 
-        horizontalInput = Input.GetAxis("Horizontal");
+        float horizontalInputTemp = Input.GetAxis("Horizontal");
+        float smoothCurrentVelocity = 0.0f;
+        horizontalInput = Mathf.SmoothDamp(horizontalInput, horizontalInputTemp, ref smoothCurrentVelocity, 0.005f);
         verticalInput = Input.GetAxis("Vertical");
         if (UseController)
         {
@@ -359,6 +394,8 @@ public class BikeControlRemake : MonoBehaviour
             {
                 currentGearSelect = 0;
             }
+
+
         }
         if (Input.GetKeyDown("q")) // TOGGLE GEARBOX MODE
         {
@@ -646,12 +683,14 @@ public class BikeControlRemake : MonoBehaviour
                     //decrease gear
                     yield return new WaitForSeconds(changeGearTime);
 
+
                     if (currentRPM > decreaseGearRPM || currentGear <= 0)
                     {
                         gearState = GearState.Running;
                         isChangingGear = false;
                         yield break;
                     }
+
                 }
                 gearState = GearState.Changing;
                 yield return new WaitForSeconds(changeGearTime);
@@ -691,30 +730,6 @@ public class BikeControlRemake : MonoBehaviour
         if (gearState != GearState.Neutral) { gearState = GearState.Running; }
         isChangingGear = false;
     }
-
-    IEnumerator ChangeRPM()
-    {
-        if (currentRPM == 0.0f && clusterCheck == true) // COLD START INITIAL POSITION
-        {
-            // Increase RPM
-            yield return StartCoroutine(AdjustRPM(currentRPM, maxRPM, 1.0f));
-        }
-
-        if (currentRPM == maxRPM && clusterCheck == true) // HALFWAY THROUGH - MAX REVS 
-        {
-            // Decrease RPM
-            StopCoroutine("AdjustRPM");
-            yield return StartCoroutine(AdjustRPM(maxRPM, currentRPM, 1.0f));
-            clusterCheck = false;
-        }
-        if (currentRPM == maxRPM && clusterCheck == false) // HALFWAY THROUGH - MAX REVS 
-        {
-            // Decrease RPM
-            StopCoroutine("AdjustRPM");
-            yield return StartCoroutine(AdjustRPM(maxRPM, currentRPM, 1.0f));
-
-        }
-    }
     IEnumerator AdjustRPM(float startValue, float endValue, float time)
     {
         float elapsed = 0.0f;
@@ -739,7 +754,31 @@ public class BikeControlRemake : MonoBehaviour
             }
             if (currentGearSelect < currentGear)
             {
-                StartCoroutine(ChangeGear(-1));
+                /*
+                if (currentSpeed > previousGearSpeed / 3.6) 
+                {
+                    currentGearSelect = currentGear;
+                    Debug.Log("Cannot downshift at this speed");
+                }
+                */
+                if (currentSpeed > previousGearSpeed / 3.6 && currentRPM > 7600) //Higher speed and higher RPM-NOT VALID
+                {
+                    currentGearSelect = currentGear;
+                    Debug.Log("Cannot downshift at this speed");
+                }
+                if (currentSpeed > previousGearSpeed / 3.6 && currentRPM <= 7600) // Higher Speed but lower RPM-VALID 
+                {
+                    StartCoroutine(ChangeGear(-1));
+                }
+                if (currentSpeed < previousGearSpeed / 3.6) // Lower Speed - VALID
+                {
+                    StartCoroutine(ChangeGear(-1));
+                }
+
+
+
+
+
             }
         }
         else
@@ -817,7 +856,7 @@ public class BikeControlRemake : MonoBehaviour
             {
                 if (brakeModifier > 0.4)
                 {
-                    brakeModifier -= 0.07f;
+                    brakeModifier -= 2.0f * Time.deltaTime;
                 }
                 else { brakeModifier = 0.65f; }
             }
@@ -857,37 +896,61 @@ public class BikeControlRemake : MonoBehaviour
     }
     public void HandleSteering()
     {
+        /*
         if (currentSpeed <= 5.0f)
         {
-            float maxSteeringAngletemp = 45.0f;
+            float maxSteeringAngletemp = 30.0f;
             maxSteeringAngle = maxSteeringAngletemp;
             targetSteeringAngle = (-currentLeanAngle / maxLeanAngle) * maxSteeringAngletemp;
             //targetSteeringAngle = maxSteeringAngletemp;
             currentSteeringAngle = Mathf.Lerp(currentSteeringAngle, targetSteeringAngle, turnSmoothing * 0.1f);
             frontWheel.steerAngle = currentSteeringAngle;
         }
+        */
+
+        if (currentSpeed <= 5.0f)
+        {
+            float maxSteeringAngletemp = 37.0f;
+            maxSteeringAngle = maxSteeringAngletemp;
+            targetSteeringAngle = horizontalInput * maxSteeringAngletemp;
+            //targetSteeringAngle = maxSteeringAngletemp;
+            currentSteeringAngle = Mathf.Lerp(currentSteeringAngle, targetSteeringAngle, turnSmoothing * 0.1f);
+            frontWheel.steerAngle = currentSteeringAngle;
+        }
+        /*
         if (currentSpeed > 5.0f && currentSpeed < 10.0f)
         {
-            float maxSteeringAngletemp = 35.0f;
+            float maxSteeringAngletemp = 24.0f;
             maxSteeringAngle = maxSteeringAngletemp;
-            targetSteeringAngle = (-currentLeanAngle / maxLeanAngle) * maxSteeringAngletemp;
+            targetSteeringAngle = horizontalInput * maxSteeringAngletemp;
             currentSteeringAngle = Mathf.Lerp(currentSteeringAngle, targetSteeringAngle, turnSmoothing * 0.1f);
             frontWheel.steerAngle = currentSteeringAngle;
         }
         if (currentSpeed > 10.0f && currentSpeed < 15.0f)
         {
-            float maxSteeringAngletemp = 25.0f;
+            float maxSteeringAngletemp = 18.0f;
             maxSteeringAngle = maxSteeringAngletemp;
             targetSteeringAngle = (-currentLeanAngle / maxLeanAngle) * maxSteeringAngletemp;
             currentSteeringAngle = Mathf.Lerp(currentSteeringAngle, targetSteeringAngle, turnSmoothing * 0.1f);
             frontWheel.steerAngle = currentSteeringAngle;
         }
-        if (currentSpeed > 15.0f && currentSpeed < 35.0f)
+        */
+        //------------------------------------
+        if (currentSpeed >= 5.0f && currentSpeed < 15.0f)
+        {
+            float maxSteeringAngletemp = 30.0f;
+            //maxSteeringAngle = maxSteeringAngletemp;
+            targetSteeringAngle = ((-currentLeanAngle / maxLeanAngle) + horizontalInput) / 2 * maxSteeringAngletemp;
+            currentSteeringAngle = Mathf.Lerp(currentSteeringAngle, targetSteeringAngle, turnSmoothing * 0.1f);
+            frontWheel.steerAngle = currentSteeringAngle;
+        }
+        //-----------------------------------
+        if (currentSpeed >= 15.0f && currentSpeed < 35.0f)
         {
             float maxSteeringAngletemp;
             if (isBraking == true)
             {
-                maxSteeringAngletemp = 22.0f;
+                maxSteeringAngletemp = 15.0f;
             }
             else
             {
@@ -900,12 +963,12 @@ public class BikeControlRemake : MonoBehaviour
             frontWheel.steerAngle = currentSteeringAngle;
 
         }
-        if (currentSpeed >= 35.0f && currentSpeed < 60.0f)
+        if (currentSpeed >= 35.0f && currentSpeed < 45.0f)
         {
             float maxSteeringAngletemp;
             if (isBraking == true)
             {
-                maxSteeringAngletemp = 25.0f;
+                maxSteeringAngletemp = 10.0f;
             }
             else
             {
@@ -916,9 +979,25 @@ public class BikeControlRemake : MonoBehaviour
             currentSteeringAngle = Mathf.Lerp(currentSteeringAngle, targetSteeringAngle, turnSmoothing * 0.1f);
             frontWheel.steerAngle = currentSteeringAngle;
         }
+        if (currentSpeed >= 45.0f && currentSpeed < 60.0f)
+        {
+            float maxSteeringAngletemp;
+            if (isBraking == true)
+            {
+                maxSteeringAngletemp = 8.0f;
+            }
+            else
+            {
+                maxSteeringAngletemp = 6.5f;
+            }
+            maxSteeringAngle = maxSteeringAngletemp;
+            targetSteeringAngle = (-currentLeanAngle / maxLeanAngle) * maxSteeringAngletemp;
+            currentSteeringAngle = Mathf.Lerp(currentSteeringAngle, targetSteeringAngle, turnSmoothing * 0.1f);
+            frontWheel.steerAngle = currentSteeringAngle;
+        }
         if (currentSpeed >= 60.0f && currentSpeed < 80.0f)
         {
-            float maxSteeringAngletemp = 8.0f;
+            float maxSteeringAngletemp = 2.0f;
             maxSteeringAngle = maxSteeringAngletemp;
             targetSteeringAngle = (-currentLeanAngle / maxLeanAngle) * maxSteeringAngletemp;
             currentSteeringAngle = Mathf.Lerp(currentSteeringAngle, targetSteeringAngle, turnSmoothing * 0.1f);
@@ -935,6 +1014,7 @@ public class BikeControlRemake : MonoBehaviour
 
         // Apply the steering angle to the front wheel
         frontWheel.steerAngle = currentSteeringAngle;
+        //frontWheel.steerAngle = 0.0f;
 
 
 
@@ -986,7 +1066,7 @@ public class BikeControlRemake : MonoBehaviour
         if (rotateWheel == true)
         {
             frontWheelTransform.localEulerAngles = new Vector3(handle.localEulerAngles.x, handle.localEulerAngles.y, frontWheel.transform.rotation.z);
-
+            frontWheel.transform.localEulerAngles = new Vector3(frontWheel.transform.rotation.x, 0.0f, frontWheel.transform.rotation.z);
         }
 
 
@@ -995,10 +1075,11 @@ public class BikeControlRemake : MonoBehaviour
     void LeanOnTurn()
     {
         Vector3 currentRot = transform.rotation.eulerAngles;
-        if (currentSpeed <= 15.0f)
+        if (currentSpeed < 5.0f)
         {
             float LeanSpeedtemp = 0.1f;
-            targetLeanAngle = maxLeanAngle * -horizontalInput;
+            float maxLeanAngleTemp = 25.0f;
+            targetLeanAngle = maxLeanAngleTemp * -horizontalInput;
             currentLeanAngle = Mathf.LerpAngle(currentLeanAngle, targetLeanAngle, LeanSpeedtemp * 0.1f);
             if (rotateBike == true)
             {
@@ -1006,7 +1087,20 @@ public class BikeControlRemake : MonoBehaviour
             }
 
         }
-        if (currentSpeed > 15.0f)
+        if (currentSpeed >= 5.0f && currentSpeed < 15.0f)
+        {
+            float LeanSpeedtemp = 0.1f;
+            float maxLeanAngleTemp = Mathf.LerpAngle(25.0f, maxLeanAngle, currentSpeed / 15.0f);
+            targetLeanAngle = maxLeanAngleTemp * -horizontalInput;
+            currentLeanAngle = Mathf.LerpAngle(currentLeanAngle, targetLeanAngle, LeanSpeedtemp * 0.1f);
+            if (rotateBike == true)
+            {
+                transform.rotation = Quaternion.Euler(currentRot.x, currentRot.y, currentLeanAngle);
+            }
+
+        }
+
+        if (currentSpeed >= 15.0f)
         {
 
             targetLeanAngle = maxLeanAngle * -horizontalInput;
@@ -1023,7 +1117,7 @@ public class BikeControlRemake : MonoBehaviour
         float shiftValue = Mathf.Lerp(-COGShiftValue / COGShiftTarget, COGShiftValue / COGShiftTarget, (LeanRatio + 1) / 2);
         if (isBraking == true)
         {
-            rb.centerOfMass = new Vector3(shiftValue * COGShiftTarget * 1.5f, COG_Offset.y, COG_Offset.z);
+            rb.centerOfMass = new Vector3(shiftValue * COGShiftTarget * 1.3f, COG_Offset.y + shiftValue * COGShiftTarget * 0.3f, COG_Offset.z);
         }
         else
         {
@@ -1117,11 +1211,8 @@ public class BikeControlRemake : MonoBehaviour
             {
                 if (currentSpeed > 0 && currentSpeed <= 10) // 0-10 FwF Modifier 
                 {
-
-
                     frontWheelfcFF.stiffness = 2.5f;
                     frontWheelfcSF.stiffness = 3.35f;
-
                     backWheelfcFF.stiffness = 2.5f;
                     backWheelfcSF.stiffness = 15.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
@@ -1131,26 +1222,19 @@ public class BikeControlRemake : MonoBehaviour
                 }
                 else if (currentSpeed > 10 && currentSpeed < 30) // 10-30 FwF modifier
                 {
-
-
                     frontWheelfcFF.stiffness = 2.5f;
                     frontWheelfcSF.stiffness = 3.65f;
-
                     backWheelfcFF.stiffness = 2.9f;
                     backWheelfcSF.stiffness = 25.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
                     frontWheel.sidewaysFriction = frontWheelfcSF;
-
                     backWheel.forwardFriction = backWheelfcFF;
                     backWheel.sidewaysFriction = backWheelfcSF;
                 }
                 else if (currentSpeed > 30 && currentSpeed < 50) // 30-50 FwF modifier
                 {
-
-
                     frontWheelfcFF.stiffness = 2.65f;
                     frontWheelfcSF.stiffness = 4.8f;
-
                     backWheelfcFF.stiffness = 4.0f;
                     backWheelfcSF.stiffness = 38.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
@@ -1160,11 +1244,8 @@ public class BikeControlRemake : MonoBehaviour
                 }
                 else if (currentSpeed > 50 && currentSpeed < 70) // 30-50 FwF modifier
                 {
-
-
                     frontWheelfcFF.stiffness = 3.2f;
                     frontWheelfcSF.stiffness = 5.5f;
-
                     backWheelfcFF.stiffness = 4.7f;
                     backWheelfcSF.stiffness = 45.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
@@ -1174,11 +1255,8 @@ public class BikeControlRemake : MonoBehaviour
                 }
                 else if (currentSpeed > 70 && currentSpeed < 90) // 70-90 FwF modifier
                 {
-
-
                     frontWheelfcFF.stiffness = 4.5f;
                     frontWheelfcSF.stiffness = 6.5f;
-
                     backWheelfcFF.stiffness = 5.5f;
                     backWheelfcSF.stiffness = 60.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
@@ -1188,13 +1266,8 @@ public class BikeControlRemake : MonoBehaviour
                 }
                 else
                 {
-
-
-
-
                     frontWheelfcFF.stiffness = 3.1f;
                     frontWheelfcSF.stiffness = 4.5f;
-
                     backWheelfcFF.stiffness = 4.0f;
                     backWheelfcSF.stiffness = 35.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
@@ -1207,13 +1280,10 @@ public class BikeControlRemake : MonoBehaviour
             {
                 if (currentSpeed > 0 && currentSpeed <= 10) // 0-10 FwF Modifier 
                 {
-
-
                     frontWheelfcFF.stiffness = 4.5f;
                     frontWheelfcSF.stiffness = 6.5f;
-
-                    backWheelfcFF.stiffness = 2.7f;
-                    backWheelfcSF.stiffness = 13.0f;
+                    backWheelfcFF.stiffness = 3.0f;
+                    backWheelfcSF.stiffness = 10.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
                     frontWheel.sidewaysFriction = frontWheelfcSF;
                     backWheel.forwardFriction = backWheelfcFF;
@@ -1221,28 +1291,21 @@ public class BikeControlRemake : MonoBehaviour
                 }
                 else if (currentSpeed > 10 && currentSpeed < 30) // 10-30 FwF modifier
                 {
-
-
                     frontWheelfcFF.stiffness = 6.2f;
                     frontWheelfcSF.stiffness = 8.5f;
-
                     backWheelfcFF.stiffness = 3.3f;
-                    backWheelfcSF.stiffness = 25.0f;
+                    backWheelfcSF.stiffness = 18.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
                     frontWheel.sidewaysFriction = frontWheelfcSF;
-
                     backWheel.forwardFriction = backWheelfcFF;
                     backWheel.sidewaysFriction = backWheelfcSF;
                 }
                 else if (currentSpeed > 30 && currentSpeed < 50) // 30-50 FwF modifier
                 {
-
-
                     frontWheelfcFF.stiffness = 6.8f;
                     frontWheelfcSF.stiffness = 10.0f;
-
                     backWheelfcFF.stiffness = 3.4f;
-                    backWheelfcSF.stiffness = 38.0f;
+                    backWheelfcSF.stiffness = 25.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
                     frontWheel.sidewaysFriction = frontWheelfcSF;
                     backWheel.forwardFriction = backWheelfcFF;
@@ -1250,11 +1313,8 @@ public class BikeControlRemake : MonoBehaviour
                 }
                 else if (currentSpeed > 50 && currentSpeed < 70) // 30-50 FwF modifier
                 {
-
-
                     frontWheelfcFF.stiffness = 8.4f;
                     frontWheelfcSF.stiffness = 13.2f;
-
                     backWheelfcFF.stiffness = 4.2f;
                     backWheelfcSF.stiffness = 43.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
@@ -1264,11 +1324,8 @@ public class BikeControlRemake : MonoBehaviour
                 }
                 else if (currentSpeed > 70 && currentSpeed < 90) // 70-90 FwF modifier
                 {
-
-
                     frontWheelfcFF.stiffness = 10.1f;
                     frontWheelfcSF.stiffness = 20.0f;
-
                     backWheelfcFF.stiffness = 5.5f;
                     backWheelfcSF.stiffness = 48.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
@@ -1278,13 +1335,8 @@ public class BikeControlRemake : MonoBehaviour
                 }
                 else
                 {
-
-
-
-
                     frontWheelfcFF.stiffness = 7.5f;
                     frontWheelfcSF.stiffness = 10.2f;
-
                     backWheelfcFF.stiffness = 3.5f;
                     backWheelfcSF.stiffness = 35.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
@@ -1293,9 +1345,7 @@ public class BikeControlRemake : MonoBehaviour
                     backWheel.sidewaysFriction = backWheelfcSF;
                 }
             }
-
         }
-
     }
     void UpdateNeedle()
     {
