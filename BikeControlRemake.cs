@@ -1,40 +1,47 @@
 using UnityEngine;
-using UnityEditor;
-using System.Drawing;
-using Unity.Hierarchy;
-using System.Runtime.CompilerServices;
-using Microsoft.Win32.SafeHandles;
-using Unity.VisualScripting;
-using UnityEngine.InputSystem;
 using System.Collections;
 using System;
 using TMPro;
-using UnityEngine.Analytics;
-using JetBrains.Annotations;
 using Unity.Cinemachine;
 using UnityEngine.Events;
-using UnityEngine.ProBuilder.Shapes;
-using UnityEngine.Rendering.PostProcessing;
-
+using UnityEngine.SceneManagement;
 //using System.Numerics;
-
-
 
 public enum GearState { Neutral, Running, CheckingChange, Changing };
 public enum GearBoxType { Manual, Automatic };
-
 public enum CameraMode { FirstPerson, ThirdPerson };
+public enum HeadlightMode { OFF, LeftOnly, RightOnly, FULL }
 
 public class BikeControlRemake : MonoBehaviour
 {
-    /*
-        public float balanceStrength = 1.0f; // Strength of automatic balancing
-        public float leanStrength = 1.0f; // Strength of leaning input
-        //public float maxLeanAngle = 45f; // Maximum lean angle
-        public float dampingFactor = 5f; // Smoothens correction
-    */
+    //public SceneStreamer sceneStreamer;
+
+    [SerializeField] private float resetFadeDuration = 2f;
+    [SerializeField] private Vector3 resetOffset = new Vector3(0, 1f, 0); // optional Y offset
+    [SerializeField] private float resetCooldown = 3f;
+
+    private float lastResetTime = -Mathf.Infinity;
+
+    private bool isHIGHGForce;
+    public Vector3 CurrentGForce;
+    public float SteeringMultiplier = 1.0f;
+    public float RiderHeadMovementVal = 0.06f;
+    float OriginalY_Position;
+    PlayerControls controls;
+    private int fixedFrameCounter = 0;
+    public int fixedUpdateFrequency = 6;
+    public float maxSlipFF = 0.0f;
+    public float maxSlipFS = 0.0f;
+    public float maxSlipBF = 0.0f;
+    public float maxSlipBS = 0.0f;
+    public float SpringDistanceValue;
+    public float DamperValue;
     public bool validRotation = false;
+    public bool CollidedBody = false;
+    public bool isMidAir = false;
+    public bool onlyFrontTouching = false;
     public float MaxWheelieDist = 0.5f;
+    public GameObject RiderHead;
     public GameObject WaterInteractionObject;
     public GameObject BodyCollisionColliderObject;
     public GameObject WheelieColliderObject;
@@ -42,38 +49,17 @@ public class BikeControlRemake : MonoBehaviour
     public bool BodyCollided = false;
     public bool frontWheelHit;
     public bool backWheelHit;
-    public bool EnableBouyancyScript;
+    //public bool EnableBouyancyScript;
     public bool TouchingWater;
-    public float balanceKp = 12f;
-    public float balanceKpModified;
-    public float balanceKpSpeedMultiplier;
-    public float balanceKi = 0.1f;
-    public float balanceKiLeanMuliplier;
-    public float balanceKd = 5f;
-    public float balanceKdLeanMultiplier;
-    public float steerSensitivity = 2f;
-    public float maxSteerAngle = 30f;
-    public float currentMaxSteeringAngle;
-    public float currentError;
 
-    public bool balanceKpModify;
+    public UnityEvent TurnONHeadlights;
+    public UnityEvent TurnOFFHeadlights;
+    private bool TailLightON = true;
+    private bool FrontLightON = false;
 
-    private float targetLeanAnglePID = 0f;
-    private float balanceIntegral = 0f;
-    private float lastError = 0f;
-
-
-    public float rightSideDistance;
-    public float leftSideDistance;
-    public GameObject leftSideDistanceRayObject;
-    public GameObject rightSideDistanceRayObject;
-    [SerializeField] public UnityEvent TurnONHeadlights;
-    [SerializeField] public UnityEvent TurnOFFHeadlights;
-    PlayerControls controls;
     public Material emissiveMaterial;
     public Renderer objectToChange;
-
-    public CinemachineCamera cinemachineCamera;
+    public CinemachineCamera ThirdPersonCinemachineCamera;
     public CinemachineOrbitalFollow orbitalFollow;
     public CinemachineBasicMultiChannelPerlin cameraShake;
     float throttleVal;
@@ -81,17 +67,15 @@ public class BikeControlRemake : MonoBehaviour
     float ReverseVal;
     float brakeVal;
     float keyboardBrakeVal;
+    float wheelieValInp;
     float wheelieVal;
-    private float currentFrontBrakeTorque;
-    private float currentRearBrakeTorque;
+    //private float currentFrontBrakeTorque;
+    //private float currentRearBrakeTorque;
     public float leftStickXAxis;
-    public Vector2 rightStick;
-    public bool gearUp;
-    public bool gearDown;
+    //public Vector2 rightStick;
+    //public bool gearUp;
+    //public bool gearDown;
     public CameraMode cameraMode;
-    public Vector3 camOffset;
-    public float camXAxis;
-    public float camYAxis;
     public float previousGearSpeed;
     public float currentGearSpeed;
     public float nextGearSpeed;
@@ -101,8 +85,159 @@ public class BikeControlRemake : MonoBehaviour
     public bool shiftCollider;
     public bool rotateWheel;
     public GameObject ClusterSpeedoReadout;
+    public Material FullscreenMotionBlurMaterial;
+    public GameObject ThirdPersonCameraObject;
+    public GameObject FirstPersonCameraObject;
+    CinemachineBasicMultiChannelPerlin FPPCamNoiseObject;
+    CinemachineCamera FPPCameraCinemachineCamera;
+    //public float ThrottleValue;
+    public float targetSteeringAngle;
+    public float frontWheelForwardSlip;
+    public float frontWheelSidewaysSlip;
+    public float backWheelForwardSlip;
+    public float backWheelSidewaysSlip;
+    float frontWheelfcSFOriginalStiffness; //opt
+    public float LeanRatio; //Imp
+    public float horizontalInput; //Imp
+    public float verticalInput; //Imp
+    float verticalInputUp; //Imp
+    float verticalInputDown; //Imp
+    //float horizontalInputLeft;
+    //float horizontalInputRight;
+    public float COGShiftTarget; //Imp - Inspector
+    public float wheelieShiftTarget; // Imp - Inspector
+    float COGShiftValue; //Imp
+    public float engineBraking = 0.8f;
+    //public Rigidbody BikeRigidBody;
+    public Vector3 OriginalRot;
+    //float motorTorqueIncrease;
+    private Vector3 originalPos;
+    Vector3 originalCOG;
+    public Vector3 currentCOG;
+    bool isAccelerating;
+    bool isBraking;
+    Rigidbody rb;
+    public float handleModifier = 1f;
+    public bool useController;
+    //public bool HandleSteeringON;
+    public bool HandleCOGMovement;
+    public bool useHandles;
+    //public bool moveSuspension;
+    //public float maxSteeringSpeed = 17.0f;
+
+    [Header("Power/Braking")]
+    [Space(5)]
+    public float MaxSpeed = 88.0f;
+    public float motorForce;
+    public float brakeForce;
+    public float brakeModifier;
+    public Vector3 COG_Offset;
+    public bool modifyFrictionON = false;
+
+    [Space(20)]
+    [HeaderAttribute("Info")]
+    public float currentSteeringAngle;
+    [Tooltip("Dynamic steering angle based on the speed of the RB, affected by sterReductorAmmount")]
+    [Range(-45, 45)] public float currentLean;
+    public float currentLeanAngle;
+    [Space(20)]
+    [HeaderAttribute("Speed")]
+    public float currentSpeed;
+    public float currentKMHSpeed;
+    public float currentEnginePower;
+    public float currentBrakePowerF;
+    public float currentBrakePowerB;
+    [Space(20)]
+    [Header("Steering")]
+    [Space(5)]
+
+    public float maxSteeringAngle;
+    public float LeanSpeed = 0.2f;
+
+    //[Range(0f, 1f)] public float steerReductorAmmount;
+
+
+    [Range(0.001f, 1f)] public float turnSmoothing;
+    [Space(20)]
+    [Header("Headlights")]
+    public GameObject LeftHeadlight;
+    public GameObject RightHeadlight;
+    public HeadlightMode headlightMode = HeadlightMode.OFF;
+
+    [Space(20)]
+    [Header("Lean")]
+    [Space(5)]
+
+    public float maxLeanAngle = 45f;
+
+    //[Range(0.001f, 1f)] public float leanSmoothing;
+    float targetLeanAngle;
+
+    [Space(20)]
+    [Header("Object References")]
+    public Transform handle;
+    public Transform suspensionMoving;
+    //public Transform TripleClamp;
+    //public Transform suspensionFixed;
+    [Space(10)]
+    public WheelCollider frontWheel;
+    public WheelCollider backWheel;
+    [Space(10)]
+    public Transform frontWheelTransform;
+    public Transform backWheelTransform;
+    //public GameObject susTop;
+    //public GameObject susBottom;
+    public GameObject ClusterNeedle;
+    //public GameObject TailLight;
+    /*
+    public GameObject FrontLeftLightReflect;
+    public GameObject FrontRightLightReflect;
+    public GameObject FrontLeftLightSpot;
+    public GameObject FrontRightLightSpot;
+    */
+    public bool isLightON;
+    public TMP_Text RPMText;
+    public TMP_Text GearText;
+    [Space(10)]
+    [Header("Engine")]
+    public AnimationCurve hptoRPMCurve;
+    public float clutch;
+    public float currentRPM;
+    //public float variableValue;
+    private float idleRPM = 1200.0f;
+    public float maxRPM = 10000.0f;
+    public float wheelRPM;
+    private float ClusterstartPosition = 0.0f;
+    private float ClusterendPosition = -270.0f;
+    private float ClusterdesiredPosition;
+    public float[] gearRatios;
+    public float[] gearMaxSpeed;
+    private GearState gearState;
+    public GearBoxType gearBoxType;
+    public bool isChangingGear;
+    public float increaseGearRPM;
+    public float decreaseGearRPM;
+    public float ShiftUpTime = 0.4f;
+    public float changeGearTime = 0.5f;
+    //public float currentGearRatio;
+    private float currentTorque;
+    public bool ignitionON;
+    public bool engineRunning = false;
+    public bool startEngine;
+    public bool clusterCheck = true;
+    public int currentGear;
+    public int currentGearSelect = 0;
+    public float gearModifier;
+    public float gearSpeedRatio;
+    //private Vector3 previousVelocity;
+
+
     void Awake()
     {
+        rb = GetComponent<Rigidbody>();
+        DontDestroyOnLoad(this.gameObject);
+        rb.useGravity = false; // Gravity initially disabled to let closest scene load first
+        //rb = GetComponent<Rigidbody>();
         controls = new PlayerControls();
 
         controls.Gameplay.Throttle.performed += ctx => throttleVal = ctx.ReadValue<float>();
@@ -129,165 +264,42 @@ public class BikeControlRemake : MonoBehaviour
         controls.Gameplay.GearUp.performed += ctx => GearShiftUp();
         controls.Gameplay.GearDown.performed += ctx => GearShiftDown();
 
-        controls.Gameplay.WheelieInput.performed += ctx => wheelieVal = ctx.ReadValue<float>();
-        controls.Gameplay.WheelieInput.canceled += ctx => wheelieVal = 0.0f;
+        controls.Gameplay.WheelieInput.performed += ctx => wheelieValInp = ctx.ReadValue<float>();
+        controls.Gameplay.WheelieInput.canceled += ctx => wheelieValInp = 0.0f;
     }
     void OnEnable()
     {
         controls.Gameplay.Enable();
+        // Safe subscription
+        if (SceneStreamer.Instance != null)
+        {
+            SceneStreamer.Instance.OnClosestSceneLoaded += EnableGravity;
+        }
     }
     void OnDisable()
     {
         controls.Gameplay.Disable();
+        // Safe unsubscription
+        if (SceneStreamer.Instance != null)
+        {
+            SceneStreamer.Instance.OnClosestSceneLoaded -= EnableGravity;
+        }
     }
-    public Material FullscreenMotionBlurMaterial;
-    public GameObject ThirdPersonCameraObject;
-    public GameObject FirstPersonCameraObject;
-    CinemachineBasicMultiChannelPerlin FPPCamNoiseObject;
-    CinemachineCamera FPPCameraCinemachineCamera;
-    //public float ThrottleValue;
-    public float targetSteeringAngle;
-    //public float backCoefficient;
-    //public float frontCoefficient;
-    public float frontWheelForwardSlip;
-    public float frontWheelSidewaysSlip;
-    public float backWheelForwardSlip;
-    public float backWheelSidewaysSlip;
-    private bool isHandling;
-    float frontWheelfcSFOriginalStiffness; //opt
-    public float LeanRatio; //Imp
-    float currentMotorTorque; //Opt
-    public float horizontalInput; //Imp
-    public float verticalInput; //Imp
-    float verticalInputUp; //Imp
-    float verticalInputDown; //Imp
-    float horizontalInputLeft;
-    float horizontalInputRight;
-    public float COGShiftTarget; //Imp - Inspector
-    public float wheelieShiftTarget; // Imp - Inspector
-    float COGShiftValue; //Imp
-    public float engineBraking = 0.8f;
-    public Rigidbody BikeRigidBody;
-    public Vector3 OriginalRot;
-    float motorTorqueIncrease;
-    private Vector3 originalPos;
-    Vector3 originalCOG;
-    public Vector3 currentCOG;
-    bool isAccelerating;
-    bool isBraking;
-    Rigidbody rb;
-    public float handleModifier = 1f;
-    public bool useController;
-    public bool HandleSteeringON;
-    public bool HandleCOGMovement;
-    public bool useHandles;
-    public bool moveSuspension;
-    public float maxSteeringSpeed = 17.0f;
-
-    [Header("Power/Braking")]
-    [Space(5)]
-    public float MaxSpeed = 88.0f;
-    public float motorForce;
-    public float brakeForce;
-    public float brakeModifier;
-    public Vector3 COG_Offset;
-    public bool modifyFrictionON = false;
-
-    [Space(20)]
-    [HeaderAttribute("Info")]
-    public float currentSteeringAngle;
-    [Tooltip("Dynamic steering angle based on the speed of the RB, affected by sterReductorAmmount")]
-    public float current_maxSteeringAngle;
-    [Tooltip("The current lean angle applied")]
-    [Range(-45, 45)] public float currentLean;
-    public float currentLeanAngle;
-    [Space(20)]
-    [HeaderAttribute("Speed")]
-    public float currentSpeed;
-    public float currentKMHSpeed;
-    public float currentEnginePower;
-    public float currentBrakePowerF;
-    public float currentBrakePowerB;
-
-
-    [Space(20)]
-    [Header("Steering")]
-    [Space(5)]
-
-    public float maxSteeringAngle;
-    public float LeanSpeed = 0.2f;
-
-    [Range(0f, 1f)] public float steerReductorAmmount;
-
-    [Range(0.001f, 1f)] public float turnSmoothing;
-
-    [Space(20)]
-    [Header("Lean")]
-    [Space(5)]
-
-    public float maxLeanAngle = 45f;
-
-    [Range(0.001f, 1f)] public float leanSmoothing;
-    float targetLeanAngle;
-
-    [Space(20)]
-    [Header("Object References")]
-    public Transform handle;
-    public Transform suspensionMoving;
-    //public Transform TripleClamp;
-    //public Transform suspensionFixed;
-    [Space(10)]
-    public WheelCollider frontWheel;
-    public WheelCollider backWheel;
-    [Space(10)]
-    public Transform frontWheelTransform;
-    public Transform backWheelTransform;
-    //public GameObject susTop;
-    //public GameObject susBottom;
-    public GameObject ClusterNeedle;
-    //public GameObject TailLight;
-    public GameObject FrontLeftLightReflect;
-    public GameObject FrontRightLightReflect;
-    public GameObject FrontLeftLightSpot;
-    public GameObject FrontRightLightSpot;
-    public bool isLightON;
-    public TMP_Text RPMText;
-    public TMP_Text GearText;
-    [Space(10)]
-    [Header("Engine")]
-    public AnimationCurve hptoRPMCurve;
-    public float clutch;
-    public float currentRPM;
-    public float variableValue;
-    private float idleRPM = 1200.0f;
-    public float maxRPM = 10000.0f;
-    public float ratioRPM;
-    public float wheelRPM;
-    private float ClusterstartPosition = 0.0f;
-    private float ClusterendPosition = -270.0f;
-    private float ClusterdesiredPosition;
-    public float[] gearRatios;
-    public float[] gearMaxSpeed;
-    private GearState gearState;
-    public GearBoxType gearBoxType;
-    public bool isChangingGear;
-    public float increaseGearRPM;
-    public float decreaseGearRPM;
-    public float ShiftUpTime = 0.4f;
-    public float changeGearTime = 0.5f;
-    public float currentGearRatio;
-    private float currentTorque;
-    public bool ignitionON;
-    public bool engineRunning = false;
-    public bool startEngine;
-    public bool clusterCheck = true;
-    public int currentGear;
-    public int currentGearSelect = 0;
-    public float gearModifier;
-    public float gearSpeedRatio;
-    private Vector3 previousVelocity;
-
-
+    private bool _gravityEnabled = false;
+    private void EnableGravity()
+    {
+        if (!_gravityEnabled)
+        {
+            rb.useGravity = true;
+            _gravityEnabled = true;
+            Debug.Log("Gravity enabled via event");
+        }
+    }
+    void OnDestroy()
+    {
+        blurAmount = 0.0f;
+        MotionBlur();
+    }
     void GearShiftUp()
     {
         if (currentGearSelect < 6)
@@ -311,106 +323,119 @@ public class BikeControlRemake : MonoBehaviour
     void Start()
     {
 
-        frontWheel.ConfigureVehicleSubsteps(2, 5, 200);
-        backWheel.ConfigureVehicleSubsteps(2, 5, 200);
-        //WheelCollider backWheelColliderObject = backWheel.GetComponent<WheelCollider>();
-        //JointSpring backWheelSpringObject = backWheel.suspensionSpring;
-        rb = GetComponent<Rigidbody>();
+        frontWheel.ConfigureVehicleSubsteps(5, 30, 10);
+        backWheel.ConfigureVehicleSubsteps(5, 30, 10);
         SphereCollider waterCheckRigidBody = WaterInteractionObject.GetComponent<SphereCollider>();
-        //CapsuleCollider BodyCollisionCollider = BodyCollisionColliderObject.GetComponent<CapsuleCollider>();
         wheelieSphereCollider = WheelieColliderObject.GetComponent<SphereCollider>();
-        //BodyCollided = BodyCollisionColliderObject.GetComponent<CapsuleCollisionDetection>().isColliding;
-
         emissiveMaterial = objectToChange.GetComponent<Renderer>().material;
-
-        orbitalFollow = cinemachineCamera.GetComponent<CinemachineOrbitalFollow>();
+        //orbitalFollow = ThirdPersonCinemachineCamera.GetComponent<CinemachineOrbitalFollow>();
+        orbitalFollow = ThirdPersonCameraObject.GetComponent<CinemachineOrbitalFollow>();
         FPPCamNoiseObject = cameraShake.GetComponent<CinemachineBasicMultiChannelPerlin>();
         FPPCameraCinemachineCamera = FirstPersonCameraObject.GetComponent<CinemachineCamera>();
         originalPos = transform.position;
         OriginalRot = transform.rotation.eulerAngles;
         originalCOG = rb.centerOfMass;
-        //rb.centerOfMass = COG_Offset;
+        OriginalY_Position = RiderHead.transform.localPosition.y;
         clusterCheck = true;
         gearBoxType = GearBoxType.Manual;
-        //cameraMode = CameraMode.FirstPerson;
-    }
 
+
+
+    }
+    private float timer = 0f; // Tracks elapsed time
+    public float executionInterval = 0.85f; // Interval in seconds
 
     void Update()
     {
+        if (!_gravityEnabled &&
+            SceneStreamer.Instance != null &&
+            SceneStreamer.Instance.IsClosestSceneLoaded)
+        {
+            EnableGravity();
+        }
+
         GetInput();
-        //HandleEngineA();
-        HandleElectronics();
-        updateSuspension();
-        //ABSSystem();
-        CheckCollisions();
         UpdateCluster();
-        //CheckGroundDistanceRaycasts();
+        //CheckCollisions();
+        isHIGHGForce = GetComponent<GForceScript>().isHIGHGForce;
         MotionBlur();
+
+        updateSuspension();
+
+        // Increment the timer by the time elapsed since the last frame
+        timer += Time.deltaTime;
+
+        // Check if the timer has exceeded the execution interval
+        if (timer >= executionInterval)
+        {
+            ExecutePeriodicFunction(); // Call the function
+            timer = 0f; // Reset the timer
+        }
+    }
+    void ExecutePeriodicFunction()
+    {
+        UpdateHeadlights();
+
     }
     void LateUpdate()
     {
-        //CheckWater();
-
-
+        //updateSuspension();
     }
-
-
-    // Update is called once per frame
     void FixedUpdate()
     {
-        //HandleGearBox();
+        //Throttled Fixed Update Execution
+        fixedFrameCounter++;
+        if (fixedFrameCounter >= 100000) { fixedFrameCounter = 0; }
+        if (fixedFrameCounter % fixedUpdateFrequency == 0) { throttledFixedUpdate(); }
+        //Normal Fixed Update Execution
         HandleEngineA();
-        //HandleEngineB();
-        //ApplyMotor();
         CheckSlip();
         ABSSystem();
         ApplyBrake();
         HandleEngineState();
         Speed_O_Meter();
-        //UpdateNeedle();
-        //UpdateCluster();
-
         UpdateWheels();
-
-
-        /*
-        HandlePIDController();
-        BalanceBike();
-        ApplyCounterSteering();
-        */
-
         LeanOnTurn();
-        CheckRotationValidity();
+        ModifySteeringLimit();
         HandleSteering();
 
+        CheckWheelHit();
+        CheckCollisions();
+        ChangeFrictionMultiplierStiffness();
+
+        ModifyFriction();
 
         if (HandleCOGMovement)
         {
-            if (isAccelerating == true)
-            {
-                MoveCOG();
-                //UpdateHandles();
-            }
-            if (isBraking == true)
-            {
-                //Dont move COG
-                //MoveCOG();
-            }
-            if (isAccelerating == false || isBraking == false)
-            {
-                MoveCOG();
-                //UpdateHandles();
-            }
+            if (isAccelerating == true) { MoveCOG(); }
+            if (isAccelerating == false || isBraking == false) { MoveCOG(); }
         }
-
-        //MoveCOG();
-
-        //HandleSteering();
-        ModifyFriction();
         UpdateHandles();
+        MoveRiderHead();
+    }
+
+    void throttledFixedUpdate()
+    {
+        /*   
+        if (sceneStreamer.IsClosestSceneLoaded && !rb.useGravity)
+        {
+            rb.useGravity = true; // Enable gravity when scene is loaded
+            Debug.Log("Gravity Enabled");
+        }
+        */
+
+        CheckRotationValidity();
+
+
+
         HandleCamera();
 
+        CheckGearSpeeds();
+        HandleElectronics();
+
+    }
+    void CheckGearSpeeds()
+    {
         if (currentGear != 0)
         {
             previousGearSpeed = gearMaxSpeed[currentGear - 1];
@@ -424,10 +449,6 @@ public class BikeControlRemake : MonoBehaviour
             nextGearSpeed = 0.0f;
         }
         currentGearSpeed = gearMaxSpeed[currentGear];
-        CheckWheelHit();
-        //CheckCollisions();
-        //CheckWater();
-        //updateSuspension();
     }
     void UpdateCluster()
     {
@@ -446,13 +467,81 @@ public class BikeControlRemake : MonoBehaviour
         string GearTextVal = (gearState == GearState.Neutral) ? "N" : (currentGear + 1).ToString();
         GearText.SetText(GearTextVal);
     }
+    //private float resetHoldTime = 2f; // Hold for 2 seconds
+    //private float holdTimer = 0f;
+    //private bool isHolding = false;
+    private float holdTimer = 0f;
+    [SerializeField] private float holdThreshold = 0.5f;
+    private void ResetBikeWithFade()
+    {
+        if (Time.time - lastResetTime < resetCooldown) return;
+
+        Transform spawnPoint = FindNearestSpawnPoint();
+        if (spawnPoint == null) return;
+
+        if (ScreenFader.Instance != null)
+        {
+            ScreenFader.Instance.FadeOutIn(resetFadeDuration, () =>
+            {
+                rb.linearVelocity = Vector3.zero;
+                rb.angularVelocity = Vector3.zero;
+                transform.position = spawnPoint.position + resetOffset;
+                transform.rotation = spawnPoint.rotation;
+
+                TouchingWater = false;
+                CollidedBody = false;
+                validRotation = true;
+                lastResetTime = Time.time;
+            });
+        }
+        else
+        {
+            Debug.LogWarning("ScreenFader.Instance not found. Performing instant reset.");
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+            transform.position = spawnPoint.position + resetOffset;
+            transform.rotation = spawnPoint.rotation;
+
+            TouchingWater = false;
+            CollidedBody = false;
+            validRotation = true;
+            lastResetTime = Time.time;
+        }
+    }
+    private Transform FindNearestSpawnPoint()
+    {
+        GameObject[] spawns = GameObject.FindGameObjectsWithTag("Respawn");
+        Transform nearest = null;
+        float minDist = Mathf.Infinity;
+
+        foreach (GameObject go in spawns)
+        {
+            float dist = Vector3.Distance(transform.position, go.transform.position);
+            if (dist < minDist)
+            {
+                minDist = dist;
+                nearest = go.transform;
+            }
+        }
+
+        return nearest;
+    }
+
 
     void GetInput()
     {
         //float rawHorizontalInput = Input.GetAxis("Horizontal");
         //horizontalInput = Mathf.Lerp(horizontalInput, rawHorizontalInput, 10*Time.deltaTime);
 
-
+        if (Input.GetKey(KeyCode.Space))
+        {
+            Debug.Log("Slip Data OUT");
+            Debug.Log("MaxSlip FF " + maxSlipFF);
+            Debug.Log("MaxSlip FS " + maxSlipFS);
+            Debug.Log("MaxSlip BF " + maxSlipBF);
+            Debug.Log("MaxSlip BS " + maxSlipBS);
+            Debug.Log("------------------------------------");
+        }
         //verticalInput = Input.GetAxis("Vertical");
         if (useController)
         {
@@ -461,7 +550,7 @@ public class BikeControlRemake : MonoBehaviour
             float horizontalInputTemp = leftStickXAxis;
 
             float smoothCurrentVelocity = 0.0f;
-            float speedHorizontalSmoothTime = Mathf.Lerp(0.02f, 0.06f, (currentSpeed / MaxSpeed));
+            float speedHorizontalSmoothTime = Mathf.Lerp(0.03f, 0.06f, (currentSpeed / MaxSpeed));
             horizontalInput = Mathf.SmoothDamp(horizontalInput, horizontalInputTemp, ref smoothCurrentVelocity, speedHorizontalSmoothTime);
 
             //horizontalInput = horizontalInputTemp;
@@ -469,9 +558,6 @@ public class BikeControlRemake : MonoBehaviour
             {
                 if (ReverseVal > 0.01f)
                 {
-
-
-
                     frontWheel.brakeTorque = 0.0f;
                     backWheel.brakeTorque = 0.0f;
                     frontWheel.motorTorque = -80.0f;
@@ -481,6 +567,19 @@ public class BikeControlRemake : MonoBehaviour
                     frontWheel.motorTorque = 0.0f;
                 }
             }
+            float wheelieValVelocity = 0.0f;
+            float wheelieValVelocityDown = 0.0f;
+            if (wheelieValInp > 0.25f)
+            {
+                wheelieVal = Mathf.SmoothDamp(wheelieVal, wheelieValInp, ref wheelieValVelocity, 0.1f);
+            }
+            else
+            {
+                wheelieVal = Mathf.SmoothDamp(wheelieVal, wheelieValInp, ref wheelieValVelocityDown, 0.115f);
+            }
+
+
+
 
         }
         else
@@ -544,13 +643,38 @@ public class BikeControlRemake : MonoBehaviour
 
         if (Input.GetKey("r"))
         {
-            //transform.position = originalPos;
-            rb.MovePosition(originalPos);
-            transform.eulerAngles = OriginalRot;
-            currentGear = 0;
-            currentGearSelect = 0;
+            holdTimer += Time.deltaTime;
+            if (holdTimer >= holdThreshold)
+            {
+                ResetBikeWithFade();
+
+                Debug.Log("Resetting Position");
+                GetComponent<Bouyancy>().enabled = false;
+                TouchingWater = false;
+                CollidedBody = false;
+                isMidAir = false;
+
+                //transform.position = originalPos;
+                //rb.MovePosition(originalPos);
+                //transform.eulerAngles = OriginalRot;
+                if (currentGear != 0)
+                {
+                    currentGear = 0;
+                    currentGearSelect = 0;
+                }
+                blurAmount = 0.0f;
+
+                holdTimer = 0f; // prevent repeat
+            }
 
         }
+
+        if (currentGear < 0) // For out of index error prevention
+        {
+            currentGear = 0;
+            currentGearSelect = 0;
+        }
+        /*
         if (Input.GetKeyDown(KeyCode.LeftShift)) // UPSHIFT
         {
 
@@ -573,6 +697,7 @@ public class BikeControlRemake : MonoBehaviour
                 currentGearSelect = 0;
             }
         }
+        */
 
         if (Input.GetKeyDown("q")) // TOGGLE GEARBOX MODE
         {
@@ -632,15 +757,19 @@ public class BikeControlRemake : MonoBehaviour
 
         if (Input.GetKeyDown("f")) //IGNITION TOGGLE
         {
-            if (isLightON == false)
+            /*
+            if (headlightMode != HeadlightMode.OFF)
             {
                 isLightON = true;
             }
-            else
+            if (headlightMode == HeadlightMode.OFF)
             {
                 isLightON = false;
             }
+            */
+            CycleHeadlightMode();
         }
+
 
         if (gearState != GearState.Changing)
         {
@@ -657,50 +786,86 @@ public class BikeControlRemake : MonoBehaviour
         clutch = Input.GetKey("g") ? 0 : Mathf.Lerp(clutch, 1.0f, Time.deltaTime);
 
     }
-    void turnOnHeadlights()
+    private void CycleHeadlightMode()
     {
-        FrontLeftLightReflect.SetActive(true);
-        FrontRightLightReflect.SetActive(true);
-        FrontLeftLightSpot.SetActive(true);
-        FrontRightLightSpot.SetActive(true);
+        headlightMode = (HeadlightMode)(((int)headlightMode + 1) % 4); // Cycle through the enum states
     }
-    void turnOffHeadlights()
+
+    private void UpdateHeadlights()
     {
-        FrontLeftLightReflect.SetActive(false);
-        FrontRightLightReflect.SetActive(false);
-        FrontLeftLightSpot.SetActive(false);
-        FrontRightLightSpot.SetActive(false);
+        switch (headlightMode)
+        {
+            case HeadlightMode.OFF:
+                SetHeadlightEmission(LeftHeadlight, false);
+                SetHeadlightEmission(RightHeadlight, false);
+                break;
+            case HeadlightMode.LeftOnly:
+                SetHeadlightEmission(LeftHeadlight, true);
+                SetHeadlightEmission(RightHeadlight, false);
+                break;
+            case HeadlightMode.RightOnly:
+                SetHeadlightEmission(LeftHeadlight, false);
+                SetHeadlightEmission(RightHeadlight, true);
+                break;
+            case HeadlightMode.FULL:
+                SetHeadlightEmission(LeftHeadlight, true);
+                SetHeadlightEmission(RightHeadlight, true);
+                break;
+        }
     }
+
+    private void SetHeadlightEmission(GameObject headlight, bool enable)
+    {
+        if (headlight != null)
+        {
+            var material = headlight.GetComponent<Renderer>().material;
+            if (enable)
+            {
+                material.EnableKeyword("_EMISSION");
+            }
+            else
+            {
+                material.DisableKeyword("_EMISSION");
+            }
+        }
+    }
+
     void HandleElectronics()
     {
         if (verticalInputDown < 0.0f)
         {
-            turnOnTailLight();
+            if (TailLightON == false) { turnOnTailLight(); }
+
         }
         else
         {
-            turnOffTailLight();
+            if (TailLightON == true) { turnOffTailLight(); }
+
         }
+
+        if (headlightMode != HeadlightMode.OFF)
+        {
+            isLightON = true;
+            TurnONHeadlights.Invoke();
+        }
+        if (headlightMode == HeadlightMode.OFF)
+        {
+            isLightON = false;
+            TurnOFFHeadlights.Invoke();
+        }
+        /*
         if (isLightON == true)
         {
-            /*
-            FrontLeftLightReflect.SetActive(true);
-            FrontRightLightReflect.SetActive(true);
-            FrontLeftLightSpot.SetActive(true);
-            FrontRightLightSpot.SetActive(true);
-            */
             TurnONHeadlights.Invoke();
+
         }
         if (isLightON == false)
         {
+
             TurnOFFHeadlights.Invoke();
-            /*
-            FrontLeftLightReflect.SetActive(false);
-            FrontRightLightReflect.SetActive(false);
-            FrontLeftLightSpot.SetActive(false);
-            FrontRightLightSpot.SetActive(false);
-            */
+
         }
+        */
 
 
     }
@@ -709,7 +874,16 @@ public class BikeControlRemake : MonoBehaviour
     {
         currentTorque = CalculateTorque();
         //frontWheel.motorTorque = 0.0001f;
-        backWheel.motorTorque = currentTorque * verticalInputUp;
+        if (engineRunning == true && startEngine == true && verticalInputUp > 0.0f)
+        {
+            backWheel.motorTorque = currentTorque * verticalInputUp;
+            //frontWheel.motorTorque = currentTorque * verticalInputUp;
+        }
+        else
+        {
+            currentTorque = 0.0f;
+            backWheel.motorTorque = 0.0f;
+        }
         currentEnginePower = backWheel.motorTorque;
     }
     float CalculateTorque()
@@ -718,8 +892,6 @@ public class BikeControlRemake : MonoBehaviour
         if (currentRPM < idleRPM + 200 && verticalInputUp < 0.1f && currentGear == 0)
         {
             gearState = GearState.Neutral;
-
-
         }
         if (gearBoxType == GearBoxType.Automatic)
         {
@@ -747,25 +919,32 @@ public class BikeControlRemake : MonoBehaviour
         {
             if (clutch < 0.1f) //Clutch Engaged
             {
-                currentRPM = Mathf.Lerp(currentRPM, Mathf.Max(idleRPM, maxRPM * verticalInputUp) + UnityEngine.Random.Range(-50, 50), 10 * Time.deltaTime);
+                currentRPM = Mathf.Lerp(currentRPM, Mathf.Max(idleRPM, maxRPM * verticalInputUp) + UnityEngine.Random.Range(-50, 50), 2.0f * Time.deltaTime);
             }
             else //Clutch disengaged - Connected
             {
                 wheelRPM = Mathf.Abs(backWheel.rpm) * gearRatios[currentGear];
-                currentRPM = Mathf.Lerp(currentRPM, Mathf.Max(idleRPM - 100, wheelRPM), Time.deltaTime * 3f);
+                currentRPM = Mathf.Lerp(currentRPM, Mathf.Max(idleRPM - 100, wheelRPM), Time.deltaTime * 3f) + UnityEngine.Random.Range(-10, 10);
+                if (currentRPM > maxRPM) currentRPM = maxRPM; // Clamp RPM to maxRPM
                 torque = (hptoRPMCurve.Evaluate(currentRPM / maxRPM) * motorForce / currentRPM) * gearRatios[currentGear] * 5252f * clutch;
             }
         }
+        else
+        {
+            if (currentRPM > maxRPM)
+            {
+                currentRPM = maxRPM; // Clamp RPM to maxRPM
+            }
+            torque = 0.0f;
+        }
         return torque;
     }
-
-
     void HandleEngineA()
     {
         if (ignitionON == true)
         {
             ClusterSpeedoReadout.SetActive(true);
-            if (!startEngine && !engineRunning)
+            if (!startEngine && !engineRunning) // Engine off and not started
             {
                 if (clusterCheck == true && currentRPM == 0.0f)
                 {
@@ -776,37 +955,41 @@ public class BikeControlRemake : MonoBehaviour
                     StartCoroutine(AdjustRPM(currentRPM, 0.0f, 0.65f));
                     clusterCheck = false;
                 }
-
                 if (clusterCheck == false && currentRPM == 0.0f)
                 {
-                    StopAllCoroutines();
+                    //StopAllCoroutines();
+                    StopCoroutine("AdjustRPM");
                 }
                 else if (clusterCheck == false && currentRPM > 0.0f)
                 {
                     //IGNORE
                 }
             }
-
-
-            if (startEngine && !engineRunning)
+            if (startEngine && !engineRunning) // Engine started into idle state
             {
+                clusterCheck = false;
                 engineRunning = true;
                 StopAllCoroutines();
                 StartCoroutine(SmoothIncreaseRPM(0.0f, idleRPM, 0.6f));
+                currentTorque = 0.0f;
+                //startEngine = false;
             }
-            else if (engineRunning && startEngine)
+            if (engineRunning && startEngine == true) // Engine started into running state
             {
+                //startEngine = false;
+                //StopAllCoroutines();
                 ApplyMotor();
             }
-            else if (!startEngine && engineRunning)
+            if (!startEngine && engineRunning) // Turning Engine Off from Running state
             {
-                engineRunning = false;
-                StopAllCoroutines();
-                StartCoroutine(SmoothDecreaseRPM(currentRPM, 0.0f, 1.0f));
+                clutch = 1.0f;
+                //StopAllCoroutines();
+                StartCoroutine(SmoothDecreaseRPM(currentRPM, 0.0f, 0.5f));
                 if (currentRPM == 0.0f)
                 {
                     StopAllCoroutines();
                 }
+                engineRunning = false;
             }
         }
         if (ignitionON == false)
@@ -826,6 +1009,7 @@ public class BikeControlRemake : MonoBehaviour
             {
                 StopAllCoroutines();
             }
+            backWheel.motorTorque = 0.0f;
             //StopAllCoroutines();
             //currentRPM = 0.0f;
         }
@@ -1021,44 +1205,7 @@ public class BikeControlRemake : MonoBehaviour
 
     }
     //---------------------------------------------------------------------------------------------------
-    void HandleEngineB()
-    {
-        if (engineRunning == true)
-        {
-            ratioRPM = currentRPM / maxRPM;
-            if (clutch < 1f)
-            {
-                wheelRPM = Mathf.Abs(backWheel.rpm * gearRatios[currentGear]);
-                currentRPM = Mathf.Lerp(currentRPM, Mathf.Max(idleRPM - 100, wheelRPM), Time.deltaTime * 3f);
-                backWheel.motorTorque = ((currentRPM / maxRPM) * motorForce / currentRPM) * gearRatios[currentGear] * clutch;
 
-
-            }
-            else
-            {
-                currentEnginePower = Mathf.Lerp(0.0f, (currentRPM / 1000.0f) * motorForce, clutch) * gearModifier;
-                backWheel.motorTorque = currentEnginePower * clutch;
-            }
-        }
-        if (engineRunning == false)
-        {
-            currentEnginePower = 0.0f;
-            backWheel.motorTorque = 0.0f;
-        }
-        if (verticalInputDown < 0.0f)
-        {
-            frontWheel.brakeTorque = Mathf.Abs(verticalInputDown * brakeForce) * brakeModifier;
-            backWheel.brakeTorque = Mathf.Abs(verticalInputDown * brakeForce) * brakeModifier * 0.7f;
-        }
-        else
-        {
-            frontWheel.brakeTorque = 0.0f;
-            backWheel.brakeTorque = 0.0f;
-        }
-        currentEnginePower = backWheel.motorTorque;
-        currentBrakePowerF = frontWheel.brakeTorque;
-        currentBrakePowerB = backWheel.brakeTorque;
-    }
     public void HandleEngineState()
     {
         if (verticalInputUp > 0.0f)
@@ -1088,9 +1235,17 @@ public class BikeControlRemake : MonoBehaviour
             backWheel.motorTorque = currentTorque * verticalInputUp;
         }
 
-        frontWheel.brakeTorque = Mathf.Abs(verticalInputDown * brakeForce) * brakeModifier * Mathf.Lerp(0.5f, 0.85f, currentSpeed / MaxSpeed);
+        if (frontWheel.isGrounded == true)
+        {
+            frontWheel.brakeTorque = Mathf.Abs(verticalInputDown * brakeForce) * brakeModifier * Mathf.Lerp(0.85f, 0.90f, currentSpeed / MaxSpeed);
+        }
+        if (frontWheel.isGrounded != true)
+        {
+            frontWheel.brakeTorque = Mathf.Abs(verticalInputDown * brakeForce) * brakeModifier * Mathf.Lerp(0.7f, 0.90f, currentSpeed / MaxSpeed) * 0.15f;
+        }
+
         //frontWheel.brakeTorque = currentFrontBrakeTorque * Mathf.Abs(verticalInputDown);
-        backWheel.brakeTorque = Mathf.Abs(verticalInputDown * brakeForce) * 0.6f;
+        backWheel.brakeTorque = Mathf.Abs(verticalInputDown * brakeForce) * 0.75f;
 
         currentBrakePowerF = frontWheel.brakeTorque;
         currentBrakePowerB = backWheel.brakeTorque;
@@ -1247,19 +1402,19 @@ public class BikeControlRemake : MonoBehaviour
         if (currentSpeed <= 5.0f)
         {
             float t = (currentSpeed - 0.0f) / (5.0f - 0.0f);
-            float maxSteeringAngletemp = Mathf.Lerp(31.0f, 26.0f, currentSpeed / 5.0f);
+            float maxSteeringAngletemp = Mathf.Lerp(31.0f, 15.0f, currentSpeed / 5.0f);
             //float maxSteeringAngletemp = Mathf.Lerp(27.0f, 24.0f, t);
 
             maxSteeringAngle = maxSteeringAngletemp;
             targetSteeringAngle = horizontalInput * maxSteeringAngletemp;
             //targetSteeringAngle = maxSteeringAngletemp;
             currentSteeringAngle = Mathf.Lerp(currentSteeringAngle, targetSteeringAngle, turnSmoothing * 0.1f);
-            frontWheel.steerAngle = currentSteeringAngle;
+            frontWheel.steerAngle = (currentSteeringAngle * SteeringMultiplier);
         }
         if (currentSpeed > 5.0f && currentSpeed <= 15.0f)
         {
             float t = (currentSpeed - 5.0f) / (15.0f - 5.0f);
-            float maxSteeringAngletemp = Mathf.Lerp(26.0f, 14.5f, currentSpeed / 15.0f);
+            float maxSteeringAngletemp = Mathf.Lerp(15.0f, 10.0f, currentSpeed / 15.0f);
             //float maxSteeringAngletemp = Mathf.Lerp(24.0f, 20.0f, t);
 
             //maxSteeringAngle = maxSteeringAngletemp;
@@ -1268,7 +1423,7 @@ public class BikeControlRemake : MonoBehaviour
             targetSteeringAngle = (((-currentLeanAngle / 20.0f) + horizontalInput) / 2.0f) * maxSteeringAngletemp;
 
             currentSteeringAngle = Mathf.Lerp(currentSteeringAngle, targetSteeringAngle, turnSmoothing * 0.1f);
-            frontWheel.steerAngle = currentSteeringAngle;
+            frontWheel.steerAngle = currentSteeringAngle * SteeringMultiplier;
         }
         //-------------------------------------------------------------------------------------------------------------
 
@@ -1277,7 +1432,7 @@ public class BikeControlRemake : MonoBehaviour
             float maxSteeringAngletemp;
 
             float t = (currentSpeed - 15.0f) / (35.0f - 15.0f);
-            maxSteeringAngletemp = Mathf.Lerp(15.5f, 9.5f, currentSpeed / 35.0f);
+            maxSteeringAngletemp = Mathf.Lerp(10.0f, 7.0f, currentSpeed / 35.0f);
             //maxSteeringAngletemp = Mathf.Lerp(20.0f, 14f, t);
 
 
@@ -1286,7 +1441,7 @@ public class BikeControlRemake : MonoBehaviour
             //targetSteeringAngle = (-currentLeanAngle / maxLeanAngle) * maxSteeringAngletemp;
             targetSteeringAngle = (((-currentLeanAngle / maxLeanAngle) + horizontalInput) / 2.0f) * maxSteeringAngletemp;
             currentSteeringAngle = Mathf.Lerp(currentSteeringAngle, targetSteeringAngle, turnSmoothing * 0.1f);
-            frontWheel.steerAngle = currentSteeringAngle;
+            frontWheel.steerAngle = currentSteeringAngle * SteeringMultiplier;
 
         }
         if (currentSpeed > 35.0f && currentSpeed <= 45.0f)
@@ -1294,13 +1449,13 @@ public class BikeControlRemake : MonoBehaviour
             float maxSteeringAngletemp;
 
             float t = (currentSpeed - 35.0f) / (45.0f - 35.0f);
-            maxSteeringAngletemp = Mathf.Lerp(9.5f, 8.0f, currentSpeed / 45.0f);
+            maxSteeringAngletemp = Mathf.Lerp(7.0f, 5.5f, currentSpeed / 45.0f);
             //maxSteeringAngletemp = Mathf.Lerp(14f, 8.5f, t);
 
             //maxSteeringAngle = maxSteeringAngletemp;
             targetSteeringAngle = (((-currentLeanAngle / maxLeanAngle) + horizontalInput) / 2.0f) * maxSteeringAngletemp;
             currentSteeringAngle = Mathf.Lerp(currentSteeringAngle, targetSteeringAngle, turnSmoothing * 0.1f);
-            frontWheel.steerAngle = currentSteeringAngle;
+            frontWheel.steerAngle = currentSteeringAngle * SteeringMultiplier;
         }
         if (currentSpeed > 45.0f && currentSpeed <= 60.0f)
         {
@@ -1308,31 +1463,31 @@ public class BikeControlRemake : MonoBehaviour
             if (isBraking == true)
             {
                 float t = (currentSpeed - 45.0f) / (60.0f - 45.0f);
-                maxSteeringAngletemp = Mathf.Lerp(10.0f, 7.0f, currentSpeed / 60.0f);
+                maxSteeringAngletemp = Mathf.Lerp(5.5f, 6.0f, currentSpeed / 60.0f);
                 //maxSteeringAngletemp = Mathf.Lerp(8.5f, 5.5f, t);
             }
             else
             {
                 float t = (currentSpeed - 45.0f) / (60.0f - 45.0f);
-                maxSteeringAngletemp = Mathf.Lerp(8.0f, 5.5f, currentSpeed / 60.0f);
+                maxSteeringAngletemp = Mathf.Lerp(5.5f, 4.0f, currentSpeed / 60.0f);
                 //maxSteeringAngletemp = Mathf.Lerp(8.5f, 5f, t);
             }
             //maxSteeringAngle = maxSteeringAngletemp;
             targetSteeringAngle = (((-currentLeanAngle / maxLeanAngle) + horizontalInput) / 2.0f) * maxSteeringAngletemp;
             currentSteeringAngle = Mathf.Lerp(currentSteeringAngle, targetSteeringAngle, turnSmoothing * 0.1f);
-            frontWheel.steerAngle = currentSteeringAngle;
+            frontWheel.steerAngle = currentSteeringAngle * SteeringMultiplier;
         }
         if (currentSpeed > 60.0f && currentSpeed <= MaxSpeed)
         {
             float maxSteeringAngletemp;
             //float maxSteeringAngletemp = 3.0f;
             float t = (currentSpeed - 45.0f) / (60.0f - 45.0f);
-            maxSteeringAngletemp = Mathf.Lerp(5.5f, 3.0f, currentSpeed / 60.0f);
+            maxSteeringAngletemp = Mathf.Lerp(4.0f, 3.0f, currentSpeed / 60.0f);
             //maxSteeringAngletemp = Mathf.Lerp(5f, 2.5f, t);
 
             targetSteeringAngle = (((-currentLeanAngle / maxLeanAngle) + horizontalInput) / 2.0f) * maxSteeringAngletemp;
             currentSteeringAngle = Mathf.Lerp(currentSteeringAngle, targetSteeringAngle, turnSmoothing * 0.1f);
-            frontWheel.steerAngle = currentSteeringAngle;
+            frontWheel.steerAngle = currentSteeringAngle * SteeringMultiplier;
         }
 
         //----------------------------------------------------------------------------------------------------------
@@ -1353,11 +1508,16 @@ public class BikeControlRemake : MonoBehaviour
 
             if (currentSpeed <= 5.0f)
             {
-                float handleModifiertemp = currentSteeringAngle * 0.85f;
+                float handleModifiertemp = currentSteeringAngle;
                 //float handleModifierFinalTemp = Mathf.Lerp(handleModifiertemp, 0.0f, Mathf.Abs(LeanRatio));
-                float leanFactor = 1.0f - Mathf.Abs(LeanRatio); // Inverse relationship with LeanRatio
+
+                //float leanFactor = 1.0f - Mathf.Abs(LeanRatio); // Inverse relationship with LeanRatio
+
                 //float handleModifierFinalTemp = Mathf.Lerp(handleModifiertemp, -handleModifiertemp, 1.0f - leanFactor);
-                float handleModifierFinalTemp = handleModifiertemp * leanFactor;
+
+                //float handleModifierFinalTemp = handleModifiertemp * leanFactor;
+
+                float handleModifierFinalTemp = handleModifiertemp;
                 //handle.localEulerAngles = new Vector3(handle.localEulerAngles.x, currentSteeringAngle * handleModifiertemp, handle.localEulerAngles.z);
                 handle.localEulerAngles = new Vector3(handle.localEulerAngles.x, handleModifierFinalTemp, handle.localEulerAngles.z);
             }
@@ -1365,12 +1525,14 @@ public class BikeControlRemake : MonoBehaviour
             {
                 float t = (currentSpeed - 5.0f) / (15.0f - 5.0f);
                 //float handleModifiertemp = Mathf.Lerp(0.85f, 0.5f, currentSpeed / 15.0f);
-                float handleModifiertemp = currentSteeringAngle * Mathf.Lerp(0.85f, 0.0f, t);
+                float handleModifiertemp = currentSteeringAngle * Mathf.Lerp(1.0f, 0.0f, t);
 
                 //float handleModifierFinalTemp = Mathf.Lerp(handleModifiertemp, 0.0f, Mathf.Abs(LeanRatio));
-                float leanFactor = 1.0f - Mathf.Abs(LeanRatio); // Inverse relationship with LeanRatio
+                //float leanFactor = 1.0f - Mathf.Abs(LeanRatio); // Inverse relationship with LeanRatio
                 //float handleModifierFinalTemp = Mathf.Lerp(handleModifiertemp, -handleModifiertemp, 1.0f - leanFactor);
-                float handleModifierFinalTemp = handleModifiertemp * leanFactor;
+
+                //float handleModifierFinalTemp = handleModifiertemp * leanFactor;
+                float handleModifierFinalTemp = handleModifiertemp;
                 //handle.localEulerAngles = new Vector3(handle.localEulerAngles.x, currentSteeringAngle * handleModifiertemp, handle.localEulerAngles.z);
                 handle.localEulerAngles = new Vector3(handle.localEulerAngles.x, handleModifierFinalTemp, handle.localEulerAngles.z);
             }
@@ -1381,7 +1543,9 @@ public class BikeControlRemake : MonoBehaviour
                 float handleModifiertemp;
                 if (isBraking == true)
                 {
+                    //handleModifiertemp = 0.65f;
                     handleModifiertemp = 0.25f;
+                    //handleModifiertemp = Mathf.Lerp(0.0f, currentSteeringAngle * 0.45f, Time.deltaTime * 5f);
                     handle.localEulerAngles = new Vector3(handle.localEulerAngles.x, currentSteeringAngle * handleModifiertemp, handle.localEulerAngles.z);
                     //handle.localEulerAngles = new Vector3(handle.localEulerAngles.x * handleModifiertemp * handleModifier, currentSteeringAngle * handleModifier * 0.0f, handle.localEulerAngles.z * handleModifier);
                 }
@@ -1392,6 +1556,7 @@ public class BikeControlRemake : MonoBehaviour
                     //handleModifiertemp = Mathf.Lerp(0.15f, 0.0f, t);
 
                     handleModifiertemp = 0.0f;
+
 
                     handle.localEulerAngles = new Vector3(handle.localEulerAngles.x, currentSteeringAngle * handleModifiertemp, handle.localEulerAngles.z);
                 }
@@ -1425,7 +1590,11 @@ public class BikeControlRemake : MonoBehaviour
         if (shiftCollider == true)
         {
             frontWheel.transform.localPosition = new Vector3(0.0f, -0.682f, wheelColliderZDiff); // Move Wheel Collider on Z axis    
-            frontWheelTransform.position = new Vector3(handle.position.x, frontWheel.transform.position.y, wheelColliderZDiff);
+                                                                                                 //frontWheelTransform.position = new Vector3(handle.position.x, frontWheel.transform.position.y, wheelColliderZDiff);
+                                                                                                 //frontWheelTransform.localPosition = new Vector3(0.0f, frontWheel.transform.position.y, wheelColliderZDiff);
+                                                                                                 //frontWheelTransform.position = new Vector3(frontWheel.transform.position.x, frontWheel.transform.position.y, frontWheelTransform.position.z); // Move Wheel Collider on Z axis
+
+            //frontWheelTransform.localPosition = new Vector3(0.0f, -0.682f, wheelColliderZDiff); // Match the Y value
         }
 
         float wheelMeshRotVal = currentSteeringAngle * handleModifier;
@@ -1441,25 +1610,25 @@ public class BikeControlRemake : MonoBehaviour
     void LeanOnTurn()
     {
         Vector3 currentRot = transform.rotation.eulerAngles;
-        if (currentSpeed < 1.0f)
+        if (currentSpeed < 0.5f)
         {
             float LeanSpeedtemp = 0.05f;
             float maxLeanAngleTemp = 3.0f;
             targetLeanAngle = maxLeanAngleTemp * -horizontalInput;
             currentLeanAngle = Mathf.LerpAngle(currentLeanAngle, targetLeanAngle, LeanSpeedtemp * 0.1f);
         }
-        if (currentSpeed >= 1.0f && currentSpeed < 5.0f)
+        if (currentSpeed >= 0.5f && currentSpeed < 5.0f)
         {
-            float LeanSpeedtemp = 0.135f;
-            float maxLeanAngleTemp = 25.0f;
+            float LeanSpeedtemp = 0.155f;
+            float maxLeanAngleTemp = 30.0f;
             targetLeanAngle = maxLeanAngleTemp * -horizontalInput;
             currentLeanAngle = Mathf.LerpAngle(currentLeanAngle, targetLeanAngle, LeanSpeedtemp * 0.1f);
         }
         if (currentSpeed >= 5.0f && currentSpeed < 15.0f)
         {
             float t = (currentSpeed - 5.0f) / (15.0f - 5.0f);
-            float LeanSpeedtemp = Mathf.Lerp(0.135f, LeanSpeed, currentSpeed / 15.0f);
-            float maxLeanAngleTemp = Mathf.Lerp(25.0f, maxLeanAngle, currentSpeed / 15.0f);
+            float LeanSpeedtemp = Mathf.Lerp(0.155f, LeanSpeed, currentSpeed / 15.0f);
+            float maxLeanAngleTemp = Mathf.Lerp(30.0f, maxLeanAngle, currentSpeed / 15.0f);
 
             targetLeanAngle = maxLeanAngleTemp * -horizontalInput;
             currentLeanAngle = Mathf.LerpAngle(currentLeanAngle, targetLeanAngle, LeanSpeedtemp * 0.1f);
@@ -1506,7 +1675,8 @@ public class BikeControlRemake : MonoBehaviour
     }
     void MoveCOG()
     {
-        if (HandleCOGMovement == true)
+        JointSpring backWheelSpringObject = backWheel.suspensionSpring;
+        if (HandleCOGMovement == true && validRotation == true)
         {
             COGShiftValue = Mathf.Lerp(0.0f, COGShiftTarget, currentLean / maxLeanAngle);
             //float shiftValue = Mathf.Lerp(-COGShiftValue / COGShiftTarget, COGShiftValue / COGShiftTarget, (LeanRatio + 1) / 2);
@@ -1517,7 +1687,9 @@ public class BikeControlRemake : MonoBehaviour
             Physics.Raycast(downRay, out WheelieHit, 2.0f);
             Debug.DrawLine(frontWheelTransform.transform.position, WheelieHit.point, UnityEngine.Color.red);
             float wheelieHeightDiff = Mathf.Abs(WheelieHit.distance - 0.3f);
-            if (wheelieVal >= 0.05f || frontWheel.isGrounded == false)
+
+
+            if (wheelieVal >= 0.05f)
             {
                 wheelieSphereCollider.radius = 0.275f;
             }
@@ -1526,6 +1698,7 @@ public class BikeControlRemake : MonoBehaviour
                 wheelieSphereCollider.radius = 0.265f;
             }
 
+            float COG_Offset_Y_Muliplier = Mathf.Lerp(1.0f, 0.0f, 1.0f - Mathf.Abs(LeanRatio));
             if (currentSpeed <= 45.0f)
             {
                 /*
@@ -1539,17 +1712,40 @@ public class BikeControlRemake : MonoBehaviour
                 backWheel.suspensionSpring = backWheelSpringObject;
                 */
 
-                if (wheelieVal >= 0.25f && horizontalInput <= 0.275f && Mathf.Abs(LeanRatio) <= 0.2f)
+                if ((wheelieVal >= 0.25f && horizontalInput < 0.275f) && Mathf.Abs(LeanRatio) <= 0.2f)
                 {
                     //Modifying Suspension Spring inside BackWheel component 
-                    JointSpring backWheelSpringObject = backWheel.suspensionSpring;
+
+                    //JointSpring backWheelSpringObject = backWheel.suspensionSpring;
                     //backWheelSpringObject.damper = Mathf.Lerp(1800f, 5000f, wheelieVal);
-                    backWheelSpringObject.damper = 5000f;
-                    backWheel.suspensionDistance = 0.2f;
+                    /*
+                    if (wheelieVal > 0.1f && wheelieVal < 0.3f && horizontalInput < 0.275f)
+                    {
+
+
+                    }
+                    if (wheelieVal < 0.45f && wheelieVal >= 0.3f && horizontalInput < 0.275f)
+                    {
+
+                        backWheelSpringObject.damper = 4000f;
+                    }
+                    else
+                    {
+                        //JointSpring backWheelSpringObject = backWheel.suspensionSpring;
+                        //backWheelSpringObject.damper = Mathf.Lerp(1800f, 5000f, wheelieVal);
+                        backWheelSpringObject.damper = 5000f;
+                        DamperValue = 5000f;
+                        backWheel.suspensionDistance = 0.2f;
+                        SpringDistanceValue = 0.2f;
+
+                    }
+                    */
+
+                    backWheel.suspensionDistance = Mathf.Lerp(0.1f, 0.15f, wheelieVal);
+                    backWheelSpringObject.damper = Mathf.Lerp(2500f, 5000f, wheelieVal);
+
+
                     //backWheel.suspensionDistance = Mathf.Lerp(0.1f, 0.2f, wheelieVal);
-
-
-
                     backWheel.suspensionSpring = backWheelSpringObject;
 
                     //WheelieColliderObject.SetActive(true);
@@ -1570,24 +1766,17 @@ public class BikeControlRemake : MonoBehaviour
                 }
                 else
                 {
-                    if (LeanRatio >= 0.1f && wheelieVal <= 0.1f)
-                    {
-                        //WheelieColliderObject.SetActive(false);
-                    }
-                    else
-                    {
-                        //WheelieColliderObject.SetActive(true);
-                    }
-                    //Modifying Suspension Spring inside BackWheel component 
-                    JointSpring backWheelSpringObject = backWheel.suspensionSpring;
-                    //backWheelSpringObject.damper = Mathf.Lerp(1800f, 5000f, wheelieVal);
-                    backWheelSpringObject.damper = 1800f;
+
                     backWheel.suspensionDistance = 0.1f;
+                    backWheelSpringObject.damper = 2500f;
+
+                    //backWheel.suspensionDistance = 0.1f;
+                    //backWheelSpringObject.damper = 1800f;
+
+                    //backWheelSpringObject.damper = Mathf.SmoothStep(5000f, 1800f, 1.0f * Time.deltaTime);
                     //backWheel.suspensionDistance = Mathf.Lerp(0.1f, 0.2f, wheelieVal);
-
-
-
                     backWheel.suspensionSpring = backWheelSpringObject;
+
                     rb.centerOfMass = new Vector3(shiftValue * COGShiftTarget, COG_Offset.y, COG_Offset.z);
                 }
                 //wheelieShiftTarget = Mathf.Lerp(1.055f, 1.22f, currentSpeed / MaxSpeed);
@@ -1610,6 +1799,9 @@ public class BikeControlRemake : MonoBehaviour
                 backWheelSpringObject.damper = 2000f;
                 backWheel.suspensionSpring = backWheelSpringObject;
                 */
+                backWheel.suspensionDistance = 0.1f;
+                backWheelSpringObject.damper = 2500f;
+                backWheel.suspensionSpring = backWheelSpringObject;
                 rb.centerOfMass = new Vector3(shiftValue * COGShiftTarget, COG_Offset.y, COG_Offset.z);
             }
         }
@@ -1621,7 +1813,10 @@ public class BikeControlRemake : MonoBehaviour
             }
             else
             {
-                WheelieColliderObject.SetActive(true);
+                if (validRotation == true)
+                {
+                    WheelieColliderObject.SetActive(true);
+                }
             }
             rb.centerOfMass = new Vector3(COG_Offset.x, COG_Offset.y, COG_Offset.z);
         }
@@ -1690,6 +1885,52 @@ public class BikeControlRemake : MonoBehaviour
         currentCOG = rb.centerOfMass;
 
     }
+    float FrontWheelFrictionMultiplierLean = 1.0f;
+    float frontStiffnessMultiplier = 1.0f;
+    float frictionCounter;
+    void ChangeFrictionMultiplierStiffness()
+    {
+
+        if (susDiffDistance <= 0.45f && Mathf.Abs(horizontalInput) <= 0.35f)
+        {
+            FrontWheelFrictionMultiplierLean = 0.5f;
+            frictionCounter = 0.5f;
+        }
+        if (susDiffDistance > 0.45f || Mathf.Abs(horizontalInput) > 0.35f)
+        {
+
+            FrontWheelFrictionMultiplierLean = Mathf.Lerp(0.65f, 1.0f, frictionCounter);
+            if (FrontWheelFrictionMultiplierLean < 0.99f && frictionCounter < 0.99f)
+            {
+                frictionCounter += 0.01f;
+            }
+            else
+            {
+                frictionCounter = 1.0f;
+            }
+
+        }
+        else
+        {
+            if (frictionCounter != 1.0f)
+            {
+                FrontWheelFrictionMultiplierLean = Mathf.Lerp(0.65f, 1.0f, frictionCounter);
+                if (FrontWheelFrictionMultiplierLean < 0.99f && frictionCounter < 0.995f)
+                {
+                    frictionCounter += 0.025f;
+                }
+                else
+                {
+                    frictionCounter = 1.0f;
+                }
+            }
+            else
+            {
+                FrontWheelFrictionMultiplierLean = 1.0f;
+            }
+        }
+    }
+    float frontStiffnessOverride = 1.0f;
     void ModifyFriction()
     {
         WheelFrictionCurve frontWheelfcSFOriginal;
@@ -1697,6 +1938,14 @@ public class BikeControlRemake : MonoBehaviour
         frontWheelfcSFOriginal = frontWheel.sidewaysFriction;
         frontWheelfcSFChange = frontWheel.sidewaysFriction;
 
+        if (onlyFrontTouching == true)
+        {
+            frontStiffnessOverride = 0.25f;
+        }
+        if (onlyFrontTouching == false)
+        {
+            frontStiffnessOverride = 1.0f;
+        }
         frontWheelfcSFOriginalStiffness = frontWheelfcSFOriginal.stiffness;
         if (modifyFrictionON)
         {
@@ -1710,6 +1959,22 @@ public class BikeControlRemake : MonoBehaviour
 
             backWheelfcFF = backWheel.forwardFriction;
             backWheelfcSF = backWheel.sidewaysFriction;
+
+
+            /*
+            if (Mathf.Abs(LeanRatio) >= 0.2f && Mathf.Abs(horizontalInput) <= 0.35f)
+            {
+                FrontWheelFrictionMultiplierLean = 0.45f;
+            }
+            if (Mathf.Abs(LeanRatio) >= 0.2f && Mathf.Abs(horizontalInput) > 0.35f)
+            {
+                FrontWheelFrictionMultiplierLean = 0.75f;
+            }
+            else
+            {
+                FrontWheelFrictionMultiplierLean = 1.0f;
+            }
+            */
             // Friction Changes
             /*
             if (isAccelerating == true) // is Accelerating
@@ -1783,17 +2048,21 @@ public class BikeControlRemake : MonoBehaviour
             }
             else
             */
+
+
             {
+
+
                 //frontWheelfcFF.extremumSlip = Mathf.Lerp(1.75f, 1.95f, Mathf.Abs(LeanRatio));
                 //frontWheelfcSF.extremumSlip = Mathf.Lerp(1.65f, 1.85f, Mathf.Abs(LeanRatio));
                 //backWheelfcSF.extremumSlip = Mathf.Lerp(1.35f, 1.15f, Mathf.Abs(LeanRatio));
                 //backWheelfcFF.extremumSlip = Mathf.Lerp(1.2f, 1.35f, Mathf.Abs(LeanRatio));
                 if (currentSpeed >= 0 && currentSpeed <= 10) // 0-10 FwF Modifier 
                 {
-                    frontWheelfcFF.stiffness = 4.5f;
-                    frontWheelfcSF.stiffness = 6.5f;
+                    frontWheelfcFF.stiffness = 4.5f * FrontWheelFrictionMultiplierLean * frontStiffnessMultiplier;
+                    frontWheelfcSF.stiffness = 6.5f * FrontWheelFrictionMultiplierLean * frontStiffnessMultiplier;
                     backWheelfcFF.stiffness = 4.7f;
-                    backWheelfcSF.stiffness = 10.0f;
+                    backWheelfcSF.stiffness = 15.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
                     frontWheel.sidewaysFriction = frontWheelfcSF;
                     backWheel.forwardFriction = backWheelfcFF;
@@ -1801,10 +2070,15 @@ public class BikeControlRemake : MonoBehaviour
                 }
                 else if (currentSpeed > 10 && currentSpeed <= 30) // 10-30 FwF modifier
                 {
-                    frontWheelfcFF.stiffness = 5.2f;
-                    frontWheelfcSF.stiffness = 10.5f;
-                    backWheelfcFF.stiffness = 3.3f;
-                    backWheelfcSF.stiffness = 27.0f;
+
+                    frontWheelfcFF.stiffness = 6.2f * FrontWheelFrictionMultiplierLean * frontStiffnessMultiplier;
+                    //frontWheelfcSF.stiffness = 10.5f;
+                    frontWheelfcSF.stiffness = 9.5f * FrontWheelFrictionMultiplierLean * frontStiffnessMultiplier;
+                    //backWheelfcFF.stiffness = 3.3f;
+                    backWheelfcFF.stiffness = 8.3f;
+                    backWheelfcSF.stiffness = 55.0f;
+
+
                     frontWheel.forwardFriction = frontWheelfcFF;
                     frontWheel.sidewaysFriction = frontWheelfcSF;
                     backWheel.forwardFriction = backWheelfcFF;
@@ -1812,10 +2086,13 @@ public class BikeControlRemake : MonoBehaviour
                 }
                 else if (currentSpeed > 30 && currentSpeed <= 50) // 30-50 FwF modifier
                 {
-                    frontWheelfcFF.stiffness = 6.8f;
-                    frontWheelfcSF.stiffness = 13.0f;
-                    backWheelfcFF.stiffness = 3.4f;
-                    backWheelfcSF.stiffness = 36.0f;
+                    frontWheelfcFF.stiffness = 10.8f * FrontWheelFrictionMultiplierLean * frontStiffnessMultiplier;
+                    //frontWheelfcSF.stiffness = 13.0f;
+                    frontWheelfcSF.stiffness = 12.5f * FrontWheelFrictionMultiplierLean * frontStiffnessMultiplier;
+                    //backWheelfcFF.stiffness = 3.4f;
+                    backWheelfcFF.stiffness = 13.5f;
+                    //backWheelfcSF.stiffness = 36.0f;
+                    backWheelfcSF.stiffness = 85.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
                     frontWheel.sidewaysFriction = frontWheelfcSF;
                     backWheel.forwardFriction = backWheelfcFF;
@@ -1823,10 +2100,14 @@ public class BikeControlRemake : MonoBehaviour
                 }
                 else if (currentSpeed > 50 && currentSpeed <= 70) // 30-50 FwF modifier
                 {
-                    frontWheelfcFF.stiffness = 8.4f;
-                    frontWheelfcSF.stiffness = 14.2f;
-                    backWheelfcFF.stiffness = 4.2f;
-                    backWheelfcSF.stiffness = 47.0f;
+                    frontWheelfcFF.stiffness = 10.4f * FrontWheelFrictionMultiplierLean * frontStiffnessMultiplier;
+                    //frontWheelfcSF.stiffness = 14.2f;
+                    frontWheelfcSF.stiffness = 14.5f * FrontWheelFrictionMultiplierLean * frontStiffnessMultiplier;
+                    //backWheelfcFF.stiffness = 4.2f;
+                    backWheelfcFF.stiffness = 15.5f;
+                    //backWheelfcSF.stiffness = 47.0f;
+                    //backWheelfcSF.stiffness = 58.0f;
+                    backWheelfcSF.stiffness = 90.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
                     frontWheel.sidewaysFriction = frontWheelfcSF;
                     backWheel.forwardFriction = backWheelfcFF;
@@ -1834,10 +2115,10 @@ public class BikeControlRemake : MonoBehaviour
                 }
                 else if (currentSpeed > 70 && currentSpeed <= 90) // 70-90 FwF modifier
                 {
-                    frontWheelfcFF.stiffness = 10.1f;
-                    frontWheelfcSF.stiffness = 20.0f;
-                    backWheelfcFF.stiffness = 5.5f;
-                    backWheelfcSF.stiffness = 50.0f;
+                    frontWheelfcFF.stiffness = 12.1f * FrontWheelFrictionMultiplierLean * frontStiffnessMultiplier;
+                    frontWheelfcSF.stiffness = 22.0f * FrontWheelFrictionMultiplierLean * frontStiffnessMultiplier;
+                    backWheelfcFF.stiffness = 16.5f;
+                    backWheelfcSF.stiffness = 98.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
                     frontWheel.sidewaysFriction = frontWheelfcSF;
                     backWheel.forwardFriction = backWheelfcFF;
@@ -1845,16 +2126,18 @@ public class BikeControlRemake : MonoBehaviour
                 }
                 else
                 {
-                    frontWheelfcFF.stiffness = 7.5f;
-                    frontWheelfcSF.stiffness = 10.2f;
-                    backWheelfcFF.stiffness = 3.5f;
-                    backWheelfcSF.stiffness = 35.0f;
+                    frontWheelfcFF.stiffness = 10.5f * FrontWheelFrictionMultiplierLean * frontStiffnessMultiplier;
+                    frontWheelfcSF.stiffness = 13.2f * FrontWheelFrictionMultiplierLean * frontStiffnessMultiplier;
+                    backWheelfcFF.stiffness = 10.5f;
+                    backWheelfcSF.stiffness = 45.0f;
                     frontWheel.forwardFriction = frontWheelfcFF;
                     frontWheel.sidewaysFriction = frontWheelfcSF;
                     backWheel.forwardFriction = backWheelfcFF;
                     backWheel.sidewaysFriction = backWheelfcSF;
                 }
+
             }
+
 
         }
 
@@ -1878,171 +2161,66 @@ public class BikeControlRemake : MonoBehaviour
         backWheelForwardSlip = backWheelForwardSlipTemp;
         float backWheelSidewaysSlipTemp = backInfo.sidewaysSlip;
         backWheelSidewaysSlip = backWheelSidewaysSlipTemp;
-        frontWheelForwardSlip = Mathf.Round(frontWheelForwardSlipTemp);
+        //frontWheelForwardSlip = frontWheelForwardSlipTemp;
         //backCoefficient = (backInfo.sidewaysSlip / backWheel.sidewaysFriction.extremumSlip);
         //frontCoefficient = (frontInfo.sidewaysSlip / frontWheel.sidewaysFriction.extremumSlip);
+
+        float lastSlipFF = frontWheelForwardSlip;
+        float lastSlipFS = frontWheelSidewaysSlip;
+        float lastSlipBF = backWheelForwardSlip;
+        float lastSlipBS = backWheelForwardSlip;
+        /*
+        if (frontWheelForwardSlip > lastSlipFF)
+        {
+            maxSlipFF = frontWheelForwardSlip;
+        }
+        if (frontWheelSidewaysSlip > lastSlipFS)
+        {
+            maxSlipFS = frontWheelSidewaysSlip;
+        }
+        if (backWheelForwardSlip > lastSlipBF)
+        {
+            maxSlipBF = backWheelForwardSlip;
+        }
+        if (backWheelSidewaysSlip > lastSlipBS)
+        {
+            maxSlipBS = backWheelSidewaysSlip;
+        }
+        */
+        ReadSlipMax(lastSlipFF, lastSlipFS, lastSlipBF, lastSlipBS);
     }
-    void HandleCamera()
+    void ReadSlipMax(float lastSlipFF, float lastSlipFS, float lastSlipBF, float lastSlipBS)
     {
-        if (cameraMode == CameraMode.FirstPerson)
+        if (frontWheelForwardSlip > maxSlipFF)
         {
-            ThirdPersonCameraObject.SetActive(false);
-            FirstPersonCameraObject.SetActive(true);
-            //float FPPCamRotate = FirstPersonCameraObject.transform.eulerAngles.y;
-            //orbitalFollow.HorizontalAxis.Center = FPPCamRotate;
-
-            if (currentSpeed >= 15.0f)
-            {
-                FPPCamNoiseObject.AmplitudeGain = Mathf.Lerp(0.006f, 0.1f, currentSpeed / MaxSpeed);
-                FPPCamNoiseObject.FrequencyGain = Mathf.Lerp(0.7f, 1.45f, ((currentSpeed / (MaxSpeed - 15.0f) + Mathf.Abs(currentLean / maxLeanAngle)) / 2));
-                FPPCameraCinemachineCamera.Lens.FieldOfView = Mathf.Lerp(64.0f, 73.0f, (currentSpeed - 15.0f) / (MaxSpeed - 15.0f));
-            }
-            else
-            {
-                FPPCameraCinemachineCamera.Lens.FieldOfView = 64.0f;
-                FPPCamNoiseObject.AmplitudeGain = 0.0f;
-                FPPCamNoiseObject.FrequencyGain = 0.0f;
-            }
+            maxSlipFF = frontWheelForwardSlip;
         }
-        if (cameraMode == CameraMode.ThirdPerson)
+        if (frontWheelSidewaysSlip > maxSlipFS)
         {
-            ThirdPersonCameraObject.SetActive(true);
-            FirstPersonCameraObject.SetActive(false);
-            //orbitalFollow = cinemachineCamera.GetComponent<CinemachineOrbitalFollow>();
-            if (currentSpeed > 12.0f)
-            {
-                orbitalFollow.HorizontalAxis.Recentering.Wait = Mathf.Lerp(0.5f, 0.2f, currentSpeed / MaxSpeed);
-            }
-            if (currentSpeed <= 12.0f)
-            {
-                orbitalFollow.HorizontalAxis.Recentering.Wait = 2.5f;
-            }
+            maxSlipFS = frontWheelSidewaysSlip;
         }
-
+        if (backWheelForwardSlip > maxSlipBF)
+        {
+            maxSlipBF = backWheelForwardSlip;
+        }
+        if (backWheelSidewaysSlip > maxSlipBS)
+        {
+            maxSlipBS = backWheelSidewaysSlip;
+        }
     }
+
 
     public void turnOffTailLight()
     {
         emissiveMaterial.DisableKeyword("_EMISSION");
+        TailLightON = false;
     }
     public void turnOnTailLight()
     {
         emissiveMaterial.EnableKeyword("_EMISSION");
+        TailLightON = true;
     }
 
-    public void CheckGroundDistanceRaycasts()
-    {
-        Ray rayLeft = new Ray(leftSideDistanceRayObject.transform.position, -Vector3.up);
-        Ray rayRight = new Ray(rightSideDistanceRayObject.transform.position, -Vector3.up);
-        RaycastHit hitLeft;
-        RaycastHit hitRight;
-        Physics.Raycast(rayLeft, out hitLeft);
-        Physics.Raycast(rayLeft, out hitRight);
-
-        leftSideDistance = hitLeft.distance;
-        rightSideDistance = hitRight.distance;
-
-
-    }
-    void BalanceBike()
-    {
-        targetLeanAnglePID = -horizontalInput * maxLeanAngle; // Non LeanOnTurn() implementation 
-        //targetLeanAnglePID = currentLeanAngle; // LeanOnTurn() implementation
-        // Get current lean angle
-        float currentLeanAnglePID = Vector3.SignedAngle(Vector3.up, transform.up, transform.forward);
-        float error = targetLeanAnglePID - currentLeanAnglePID;
-        currentError = error;
-
-        // PID calculations
-        balanceIntegral += error * Time.fixedDeltaTime;
-        float derivative = (error - lastError) / Time.fixedDeltaTime;
-
-        //float correction = balanceKp * error + balanceKi * balanceIntegral + balanceKd * derivative;
-
-        //float correction = balanceKpModified * error + balanceKi * balanceIntegral + balanceKd * derivative;
-        float correction = (balanceKpModified * (error * Mathf.Abs(horizontalInput))) + (balanceKi * balanceIntegral * balanceKiLeanMuliplier) + (balanceKd * derivative * balanceKdLeanMultiplier);
-
-        if (error >= 1.5f || error <= -1.5f)
-        {
-            // Apply torque for balancing
-            rb.AddTorque(transform.forward * correction, ForceMode.Force);
-        }
-
-
-        // Store error for next frame
-        lastError = error;
-    }
-    void ApplyCounterSteering()
-    {
-        // Calculate steering angle based on lean angle
-        float currentLeanAnglePID = Vector3.SignedAngle(Vector3.up, transform.up, transform.forward);
-        float steerAngle = -currentLeanAnglePID * steerSensitivity;
-        steerAngle = Mathf.Clamp(steerAngle, -maxSteerAngle, maxSteerAngle); // Non handleSteering function implementation
-        //steerAngle = Mathf.Clamp(steerAngle, -currentMaxSteeringAngle, currentMaxSteeringAngle); // HandleSteering function Implementation
-        currentSteeringAngle = steerAngle;
-        // Apply steering to the front wheel
-        frontWheel.steerAngle = steerAngle;
-    }
-
-    public void HandlePIDController()
-    {
-        float balanceKpLeanMultiplier = Mathf.Lerp(1.0f, 1.5f, Mathf.Abs(currentLean / 40.0f));
-
-        if (currentSpeed < 0.5f)
-        {
-            balanceKpSpeedMultiplier = 1.0f;
-        }
-        if (currentSpeed > 0.5f && currentSpeed < 5.0f)
-        {
-            balanceKpSpeedMultiplier = Mathf.Lerp(1.0f, 0.75f, currentSpeed / 5.0f);
-        }
-        if (currentSpeed >= 5.0f && currentSpeed < 15.0f)
-        {
-            balanceKpSpeedMultiplier = Mathf.Lerp(0.75f, 0.65f, currentSpeed / 15.0f);
-        }
-        if (currentSpeed >= 15.0f && currentSpeed < 35.0f)
-        {
-            balanceKpSpeedMultiplier = Mathf.Lerp(0.65f, 0.5f, currentSpeed / 35.0f);
-        }
-        if (currentSpeed >= 35.0f && currentSpeed < 45.0f)
-        {
-            balanceKpSpeedMultiplier = Mathf.Lerp(0.5f, 0.4f, currentSpeed / 45.0f);
-        }
-        if (currentSpeed >= 45.0f && currentSpeed < 60.0f)
-        {
-            balanceKpSpeedMultiplier = Mathf.Lerp(0.4f, 0.35f, currentSpeed / 60.0f);
-        }
-        if (currentSpeed >= 60.0f && currentSpeed < MaxSpeed)
-        {
-            balanceKpSpeedMultiplier = Mathf.Lerp(0.35f, 0.25f, currentSpeed / MaxSpeed);
-        }
-        /*
-        else
-        {
-            balanceKpSpeedMultiplier = 0.5f;
-        }
-        */
-        balanceKpModified = balanceKp * balanceKpLeanMultiplier * balanceKpSpeedMultiplier;
-
-
-        //balanceKp = balanceKp * balanceKpLeanMultiplier * balanceKpSpeedMultiplier;
-
-        //balanceKi = Mathf.Lerp(0.05f, 2.0f, Mathf.Abs(currentError / 45.0f));
-        balanceKiLeanMuliplier = Mathf.Lerp(2.0f, 0.15f, Mathf.Abs(horizontalInput));
-
-
-
-        if (horizontalInput >= 0.05f || horizontalInput <= -0.05f)
-        {
-            balanceKdLeanMultiplier = Mathf.Lerp(2.0f, 1.0f, (Mathf.Abs(currentError / 45.0f) + Mathf.Abs(horizontalInput)) / 2.0f);
-        }
-        else
-        {
-            balanceKdLeanMultiplier = Mathf.Lerp(3.0f, 1.0f, (Mathf.Abs(currentError / 45.0f) + Mathf.Abs(horizontalInput)) / 2.0f);
-        }
-
-
-    }
 
 
     private void OnTriggerEnter(Collider waterCheckRigidBody)
@@ -2085,95 +2263,178 @@ public class BikeControlRemake : MonoBehaviour
         {
             backWheelHit = false;
         }
+        if (frontWheelHit == true && backWheelHit == true)
+        {
+            isMidAir = false;
+        }
+        if (frontWheelHit == false && backWheelHit == false)
+        {
+            isMidAir = true;
+        }
+        if (frontWheelHit == true && backWheelHit == false)
+        {
+            isMidAir = false;
+            onlyFrontTouching = true;
+            //rb.centerOfMass = new Vector3(COG_Offset.x, COG_Offset.y - 0.1f, COG_Offset.z - 0.25f);
+        }
+        else
+        {
+            if (frontWheelHit == false && backWheelHit == true)
+            {
+                isMidAir = false;
+            }
+
+            onlyFrontTouching = false;
+        }
     }
+
     void CheckCollisions() // Dependant on CheckWheelHit() ^
     {
+
         BodyCollided = BodyCollisionColliderObject.GetComponent<CapsuleCollisionDetection>().isColliding;
         if (TouchingWater == false)
         {
-            if (BodyCollided == true && frontWheelHit == true && backWheelHit == true) // Grounded and collided
+            if ((BodyCollided == true && isHIGHGForce) && frontWheelHit == true && backWheelHit == true) // Grounded and collided
             {
                 validRotation = false;
+                CollidedBody = true;
 
-                rb.linearDamping = 1.0f;
-                rb.angularDamping = 5.0f;
+                rb.linearDamping = 0.25f;
+                rb.angularDamping = 2.0f;
             }
             if (BodyCollided == false && frontWheelHit == true && backWheelHit == true) // [NORMAL] grounded and not collided
             {
-                validRotation = true;
+
+                if (CollidedBody == false)
+                {
+                    validRotation = true;
+                }
+                else
+                {
+                    validRotation = false;
+                }
+
 
                 rb.linearDamping = 0.005f;
                 rb.angularDamping = 0.1f;
             }
             if (BodyCollided == false && frontWheelHit == false && backWheelHit == true) // Wheelie
             {
-                validRotation = true;
+                //validRotation = true;
+                if (CollidedBody == false)
+                {
+                    validRotation = true;
+                }
+                else
+                {
+                    validRotation = false;
+                }
+
 
                 rb.linearDamping = 0.1f;
-                rb.angularDamping = 4.0f;
+                rb.angularDamping = 5.0f;
             }
             if (BodyCollided == true && frontWheelHit == false && backWheelHit == true) // FrontWheel not grounded and collided
             {
                 validRotation = false;
-
+                CollidedBody = true;
                 rb.linearDamping = 0.1f;
                 rb.angularDamping = 0.1f;
             }
             if (BodyCollided == true && frontWheelHit == false && backWheelHit == false) // mid air not grounded and collided
             {
                 validRotation = false;
-
-                rb.linearDamping = 1.0f;
-                rb.angularDamping = 2.0f;
+                CollidedBody = true;
+                rb.linearDamping = 0.05f;
+                //rb.angularDamping = 1.5f;
+                rb.angularDamping = 0.5f;
             }
             if (BodyCollided == false && frontWheelHit == false && backWheelHit == false) // mid air not grounded and not collided
             {
-                validRotation = false;
+                //validRotation = false;
+                if ((LeanRatio >= 0.25f) && (LeanRatio <= 0.55f) || (LeanRatio <= -0.55f) && (LeanRatio >= -0.25f))
+                {
+                    if (CollidedBody == false)
+                    {
+                        validRotation = true;
+                    }
+                    else
+                    {
+                        validRotation = false;
+                    }
+                }
+                else if (LeanRatio >= 0.55f || LeanRatio <= -0.55f) // - -0.55f --- 0.55f -
+                {
+                    validRotation = false;
+                }
+                else if (LeanRatio <= 0.25f && LeanRatio >= -0.25f) // --- -0.25f - 0.25f ---
+                {
+                    if (CollidedBody == false)
+                    {
+                        validRotation = true;
+                    }
+                    else
+                    {
+                        validRotation = false;
+                    }
+                }
+                else
+                {
 
-                rb.linearDamping = 0.5f;
-                rb.angularDamping = 2.0f;
+                    if (CollidedBody == false)
+                    {
+                        validRotation = true;
+                    }
+
+                }
+                //CollidedBody = true;
+                rb.linearDamping = 0.2f;
+                rb.angularDamping = 0.85f;
             }
         }
     }
 
-
-    void CheckWater()
+    float blurAmount = 0.0f;
+    float BlurCounter = 0.0f;
+    void MotionBlur()
     {
-        SphereCollider waterCheckRigidBody = WaterInteractionObject.GetComponent<SphereCollider>();
-        /*
-        void onTriggerEnter(Collider waterCheckRigidBody)
+        float currentblurAmount = FullscreenMotionBlurMaterial.GetFloat("_GodRaysStrength");
+
+        if (isHIGHGForce == true && BlurCounter <= 0.005f)
         {
-            if (waterCheckRigidBody.gameObject.tag == "Water Surface")
-            {
-                TouchingWater = true;
-                GetComponent<Bouyancy>().enabled = true;
-            }
-            else
-            {
-                TouchingWater = false;
-                GetComponent<Bouyancy>().enabled = false;
-            }
+            //FullscreenMotionBlurMaterial.SetFloat("_GodRaysStrength", 0.65f);
+            //currentblurAmount = 0.8f;
+            //blurAmount = Mathf.Lerp(currentblurAmount, 0.8f, Time.deltaTime * 8.0f);
+            blurAmount = 0.8f;
+            BlurCounter = 0.8f;
+            //FullscreenMotionBlurMaterial.SetFloat("_GodRaysStrength", blurAmount);
         }
-        */
-        //OnTriggerEnter(waterCheckRigidBody);
-
-
-        /*
-        if (EnableBouyancyScript == true)
+        if (isHIGHGForce == false && BlurCounter > 0.0f)
         {
-            GetComponent<Bouyancy>().enabled = true;
+
+            blurAmount = Mathf.Lerp(0.0f, 0.8f, BlurCounter);
+            if (blurAmount > 0.0f) BlurCounter = BlurCounter - 0.001f;
+
         }
         else
         {
-            GetComponent<Bouyancy>().enabled = false;
+            blurAmount = 0.0f;
         }
-        */
-    }
-    void MotionBlur()
-    {
-        float blurAmount = Mathf.Lerp(0.0f, 0.8f, currentSpeed / MaxSpeed);
+
+
+        //float blurAmount = Mathf.Lerp(0.0f, 0.8f, currentSpeed / MaxSpeed);
         FullscreenMotionBlurMaterial.SetFloat("_GodRaysStrength", blurAmount);
     }
+
+    /*
+    float currentBlurAmount = 0.0f;
+    void MotionBlur()
+    {
+        float targetBlurAmount = isHIGHGForce ? 0.8f : 0.0f;
+        currentBlurAmount = Mathf.Lerp(currentBlurAmount, targetBlurAmount, Time.deltaTime * 2.0f); // Adjust the speed with the multiplier
+        FullscreenMotionBlurMaterial.SetFloat("_GodRaysStrength", currentBlurAmount);
+    }
+    */
     void CheckRotationValidity()
     {
         if (validRotation == true)
@@ -2184,10 +2445,135 @@ public class BikeControlRemake : MonoBehaviour
         else
         {
             rb.constraints = RigidbodyConstraints.None;
+            //rb.centerOfMass = new Vector3(0.0f, 0.0f, 0.0f);
+        }
+
+        if (BodyCollided == true)
+        {
+            rb.constraints = RigidbodyConstraints.None;
+        }
+        if (isMidAir == true)
+        {
+            rb.constraints = RigidbodyConstraints.None;
         }
     }
 
+    void MoveRiderHead()
+    {
 
+        if (RiderHead != null && cameraMode == CameraMode.FirstPerson)
+        {
+
+            Vector3 currentPosition = RiderHead.transform.localPosition;
+
+            //float targetX = Mathf.Clamp(-LeanRatio * RiderHeadMovementVal, -RiderHeadMovementVal, RiderHeadMovementVal);
+            float targetX = RiderHeadMovementVal * (-currentLeanAngle / (maxLeanAngle * 0.75f));
+
+            float targetY = OriginalY_Position - Mathf.Lerp(0.0f, 0.07f, Mathf.Abs(currentLeanAngle / maxLeanAngle));
+
+
+
+
+            float smoothedX = Mathf.Lerp(currentPosition.x, targetX, Time.deltaTime * 4.5f);
+            float smoothedY = Mathf.Lerp(currentPosition.y, targetY, Time.deltaTime * 3.5f);
+
+            // Update the RiderHead's position
+            RiderHead.transform.localPosition = new Vector3(smoothedX, smoothedY, currentPosition.z);
+            //RiderHead.transform.localPosition = new Vector3(targetX * LeanRatio, currentPosition.y, currentPosition.z);
+
+            //RiderHead.transform.localPosition = new Vector3(RiderHeadMovementVal * (-currentLeanAngle / (maxLeanAngle * 0.75f)), currentPosition.y - targetY, currentPosition.z);
+        }
+    }
+    void ModifySteeringLimit()
+    {
+        if (horizontalInput >= 0.8f || horizontalInput <= -0.8f)
+        {
+            if (currentSpeed > 15.0f)
+            {
+                SteeringMultiplier = Mathf.Lerp(1.0f, 0.8f, Mathf.Abs(horizontalInput));
+            }
+            else
+            {
+                SteeringMultiplier = 1.0f;
+            }
+
+            //SteeringMultiplier = Mathf.InverseLerp(1.0f, 0.65f, Mathf.Abs(horizontalInput));
+
+        }
+        else
+        {
+            if (currentSpeed > 15.0f)
+            {
+                if (Mathf.Abs(horizontalInput) <= 0.3f)
+                {
+                    SteeringMultiplier = 0.75f;
+                }
+                else
+                {
+                    SteeringMultiplier = 1.0f;
+                }
+            }
+            else
+            {
+                SteeringMultiplier = 1.0f;
+            }
+        }
+    }
+
+    float GForceMagnitudeMultiplierAmp;
+    float GForceMagnitudeMultiplierFreq;
+    void GForceValues()
+    {
+        CurrentGForce = GetComponent<GForceScript>().currentGForce;
+        GForceMagnitudeMultiplierAmp = Mathf.Clamp(CurrentGForce.y / 2.0f, 0.9f, 1.35f);
+        GForceMagnitudeMultiplierFreq = Mathf.Clamp(CurrentGForce.magnitude / 0.5f, 1.2f, 4.0f);
+    }
+    void HandleCamera()
+    {
+        GForceValues();
+        if (cameraMode == CameraMode.FirstPerson)
+        {
+            ThirdPersonCameraObject.SetActive(false);
+            FirstPersonCameraObject.SetActive(true);
+            //float FPPCamRotate = FirstPersonCameraObject.transform.eulerAngles.y;
+            //orbitalFollow.HorizontalAxis.Center = FPPCamRotate;
+
+            if (currentSpeed >= 15.0f)
+            {
+                FPPCamNoiseObject.AmplitudeGain = GForceMagnitudeMultiplierAmp * Mathf.Lerp(0.006f, 0.1f, currentSpeed / MaxSpeed);
+                FPPCamNoiseObject.FrequencyGain = GForceMagnitudeMultiplierFreq * Mathf.Lerp(0.75f, 1.65f, 0.65f + Mathf.Max(currentSpeed / (MaxSpeed - 15.0f), Mathf.Abs(currentLean / maxLeanAngle)));
+                //FPPCameraCinemachineCamera.Lens.FieldOfView = Mathf.Lerp(64.0f, 73.0f, (currentSpeed - 15.0f) / (MaxSpeed - 15.0f));
+            }
+            else
+            {
+                //FPPCameraCinemachineCamera.Lens.FieldOfView = 64.0f;
+                FPPCamNoiseObject.AmplitudeGain = 0.0f;
+                FPPCamNoiseObject.FrequencyGain = 0.0f;
+            }
+        }
+        if (cameraMode == CameraMode.ThirdPerson)
+        {
+            ThirdPersonCameraObject.SetActive(true);
+            FirstPersonCameraObject.SetActive(false);
+            //orbitalFollow = cinemachineCamera.GetComponent<CinemachineOrbitalFollow>();
+            //orbitalFollow = ThirdPersonCameraObject.GetComponent<CinemachineOrbitalFollow>();
+
+            if (orbitalFollow != null)
+            {
+                if (currentSpeed > 12.0f)
+                {
+                    orbitalFollow.HorizontalAxis.Recentering.Wait = 0.15f;
+                    orbitalFollow.HorizontalAxis.Recentering.Time = 0.15f;
+                }
+                if (currentSpeed <= 12.0f)
+                {
+                    orbitalFollow.HorizontalAxis.Recentering.Wait = 4.5f;
+                    orbitalFollow.HorizontalAxis.Recentering.Time = 2.5f;
+                }
+            }
+        }
+
+    }
 
 
 }

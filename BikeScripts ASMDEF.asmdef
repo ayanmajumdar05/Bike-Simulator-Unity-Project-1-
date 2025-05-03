@@ -1,0 +1,21 @@
+{
+    "name": "BikeScriptsASMDEF",
+    "rootNamespace": "",
+    "references": [
+        "GUID:6055be8ebefd69e48b49212b09b47b2f",
+        "GUID:4307f53044263cf4b835bd812fc161a4",
+        "GUID:c81df87a20859cc4d887181a2e35b621",
+        "GUID:75469ad4d38634e559750d17036d5f7c",
+        "GUID:6546d7765b4165b40850b3667f981c26",
+        "GUID:764f4f948da46ac4083291c21a0a9d07"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
