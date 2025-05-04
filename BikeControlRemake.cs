@@ -16,12 +16,12 @@ public class BikeControlRemake : MonoBehaviour
 {
     //public SceneStreamer sceneStreamer;
 
-    [SerializeField] private float resetFadeDuration = 2f;
+    [SerializeField] private float resetFadeDuration = 3f;
     [SerializeField] private Vector3 resetOffset = new Vector3(0, 1f, 0); // optional Y offset
     [SerializeField] private float resetCooldown = 3f;
 
     private float lastResetTime = -Mathf.Infinity;
-
+    public bool isResetting = false;
     private bool isHIGHGForce;
     public Vector3 CurrentGForce;
     public float SteeringMultiplier = 1.0f;
@@ -41,6 +41,7 @@ public class BikeControlRemake : MonoBehaviour
     public bool isMidAir = false;
     public bool onlyFrontTouching = false;
     public float MaxWheelieDist = 0.5f;
+    public float groundHeight;
     public GameObject RiderHead;
     public GameObject WaterInteractionObject;
     public GameObject BodyCollisionColliderObject;
@@ -471,6 +472,7 @@ public class BikeControlRemake : MonoBehaviour
     //private float holdTimer = 0f;
     //private bool isHolding = false;
     private float holdTimer = 0f;
+    private bool isCoroutineRunning = false;
     [SerializeField] private float holdThreshold = 0.5f;
     private void ResetBikeWithFade()
     {
@@ -488,25 +490,37 @@ public class BikeControlRemake : MonoBehaviour
                 transform.position = spawnPoint.position + resetOffset;
                 transform.rotation = spawnPoint.rotation;
 
-                TouchingWater = false;
-                CollidedBody = false;
-                validRotation = true;
                 lastResetTime = Time.time;
+                isResetting = true; // Ensure this is set before starting coroutine
+
+                // Stop any existing coroutine and start new one
+                if (isCoroutineRunning)
+                {
+                    StopCoroutine("CheckWheelAfterReset");
+                }
+                StartCoroutine(CheckWheelAfterReset());
             });
         }
         else
         {
-            Debug.LogWarning("ScreenFader.Instance not found. Performing instant reset.");
+            // Instant reset fallback
             rb.linearVelocity = Vector3.zero;
             rb.angularVelocity = Vector3.zero;
             transform.position = spawnPoint.position + resetOffset;
             transform.rotation = spawnPoint.rotation;
 
-            TouchingWater = false;
-            CollidedBody = false;
-            validRotation = true;
             lastResetTime = Time.time;
+            isResetting = true;
+
+            if (isCoroutineRunning)
+            {
+                StopCoroutine("CheckWheelAfterReset");
+            }
+            StartCoroutine(CheckWheelAfterReset());
         }
+
+        TouchingWater = false;
+        CollidedBody = false;
     }
     private Transform FindNearestSpawnPoint()
     {
@@ -525,6 +539,36 @@ public class BikeControlRemake : MonoBehaviour
         }
 
         return nearest;
+    }
+    private IEnumerator CheckWheelAfterReset()
+    {
+        isCoroutineRunning = true;
+
+        // Wait for a short moment to avoid immediate checks
+        yield return new WaitForSeconds(0.5f);
+
+        // Keep checking until the bike is grounded
+        while (true)
+        {
+            // Check if both wheels are grounded
+            if (frontWheelHit && backWheelHit)
+            {
+                isResetting = false;
+                validRotation = true;
+                CollidedBody = false;
+                break;
+            }
+
+            // Also check if we're no longer resetting (in case reset was aborted)
+            if (!isResetting)
+            {
+                break;
+            }
+
+            yield return null; // Wait for next frame
+        }
+
+        isCoroutineRunning = false;
     }
 
 
@@ -646,6 +690,7 @@ public class BikeControlRemake : MonoBehaviour
             holdTimer += Time.deltaTime;
             if (holdTimer >= holdThreshold)
             {
+                isResetting = true;
                 ResetBikeWithFade();
 
                 Debug.Log("Resetting Position");
@@ -653,6 +698,7 @@ public class BikeControlRemake : MonoBehaviour
                 TouchingWater = false;
                 CollidedBody = false;
                 isMidAir = false;
+                //validRotation = true;
 
                 //transform.position = originalPos;
                 //rb.MovePosition(originalPos);
@@ -663,6 +709,17 @@ public class BikeControlRemake : MonoBehaviour
                     currentGearSelect = 0;
                 }
                 blurAmount = 0.0f;
+                isResetting = false;
+                if (frontWheel.isGrounded == true && backWheel.isGrounded == true && BodyCollided == false)
+                {
+                    isResetting = false;
+                    validRotation = true;
+                }
+                if (isResetting == true && groundHeight < 0.5f)
+                {
+                    isResetting = false;
+                    validRotation = true;
+                }
 
                 holdTimer = 0f; // prevent repeat
             }
@@ -969,7 +1026,8 @@ public class BikeControlRemake : MonoBehaviour
             {
                 clusterCheck = false;
                 engineRunning = true;
-                StopAllCoroutines();
+                //StopAllCoroutines();
+                StopCoroutine("AdjustRPM");
                 StartCoroutine(SmoothIncreaseRPM(0.0f, idleRPM, 0.6f));
                 currentTorque = 0.0f;
                 //startEngine = false;
@@ -1687,7 +1745,7 @@ public class BikeControlRemake : MonoBehaviour
             Physics.Raycast(downRay, out WheelieHit, 2.0f);
             Debug.DrawLine(frontWheelTransform.transform.position, WheelieHit.point, UnityEngine.Color.red);
             float wheelieHeightDiff = Mathf.Abs(WheelieHit.distance - 0.3f);
-
+            groundHeight = wheelieHeightDiff;
 
             if (wheelieVal >= 0.05f)
             {
@@ -2288,11 +2346,16 @@ public class BikeControlRemake : MonoBehaviour
         }
     }
 
+
     void CheckCollisions() // Dependant on CheckWheelHit() ^
     {
+        if (isResetting == true && groundHeight < 0.5f)
+        {
+            isResetting = false;
+        }
 
         BodyCollided = BodyCollisionColliderObject.GetComponent<CapsuleCollisionDetection>().isColliding;
-        if (TouchingWater == false)
+        if (TouchingWater == false && isResetting == false)
         {
             if ((BodyCollided == true && isHIGHGForce) && frontWheelHit == true && backWheelHit == true) // Grounded and collided
             {
@@ -2371,6 +2434,7 @@ public class BikeControlRemake : MonoBehaviour
                 {
                     if (CollidedBody == false)
                     {
+
                         validRotation = true;
                     }
                     else
